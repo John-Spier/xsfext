@@ -8,12 +8,14 @@ namespace SSFExt
 {
     public enum BinaryType
     {
+        ANY,
         BIN,
         XSF,
         MINIXSF
     }
     public enum XsfType //can add gsf for real gba playback later
     {
+        ANY,
         SSF,
         DSF
     }
@@ -48,7 +50,7 @@ namespace SSFExt
         public int file_start;
         public int file_end;
         public VFSBinary2 binary;
-        public bool use_libs;
+        public bool dont_load_xsflibs;
         public List<int> libs;
     }
     public struct VFSBinary2
@@ -337,8 +339,11 @@ namespace SSFExt
             return [.. extracted];
         }
 
-        static VFSFile2[] GetVFSFiles(string dir, string pattern = "*.ssf", Encoding? enc = null, bool verbose = false, StreamWriter? con = null, bool usemd5 = true)
+        static VFSFile2[] GetVFSFiles(string dir, string pattern = "*.ssf", Encoding? enc = null, 
+            bool verbose = false, StreamWriter? con = null, bool usemd5 = true, XsfType? xpattern = null,
+            bool add_direct_files = true) //BinaryType? bpattern = null,
         {
+            xpattern ??= XsfType.ANY;
             List<VFSFile2> xsffiles = [];
             List<VFSFile2> listfiles = [];
             Dictionary<string, int> xsfmd5 = []; //key = md5 or filename, value = index in xsffiles
@@ -347,12 +352,35 @@ namespace SSFExt
             {
                 try
                 {
-                    if (pattern == "*.*" &&
-                        !(Path.GetExtension(file).Equals(".ssf", StringComparison.OrdinalIgnoreCase) ||
-                        Path.GetExtension(file).Equals(".minissf", StringComparison.OrdinalIgnoreCase) ||
-                        Path.GetExtension(file).Equals(".bin", StringComparison.OrdinalIgnoreCase)))
+                    if (pattern == "*.*")
                     {
-                        continue;
+                        
+                        switch (xpattern.Value)
+                        {
+                            case XsfType.SSF:
+                                if (!(Path.GetExtension(file).Equals(".ssf", StringComparison.OrdinalIgnoreCase) ||
+                                    Path.GetExtension(file).Equals(".minissf", StringComparison.OrdinalIgnoreCase) ||
+                                    Path.GetExtension(file).Equals(".ssfbin", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    continue;
+                                }
+                                break;
+                            case XsfType.DSF:
+                                if (!(Path.GetExtension(file).Equals(".ssf", StringComparison.OrdinalIgnoreCase) ||
+                                    Path.GetExtension(file).Equals(".minissf", StringComparison.OrdinalIgnoreCase) ||
+                                    Path.GetExtension(file).Equals(".dsfbin", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    continue;
+                                }
+                                break;
+                            case XsfType.ANY:
+                                if (!(Path.GetExtension(file).EndsWith("sf", StringComparison.OrdinalIgnoreCase) || //includes mini and xsfs longer than 3 chars like ncsf
+                                    Path.GetExtension(file).EndsWith("sfbin", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    continue;
+                                }
+                                break;
+                        }
                     }
                     if (verbose)
                     {
@@ -361,7 +389,13 @@ namespace SSFExt
                     XsfTable table = LoadFile(file, enc: enc, getmd5: usemd5, loadfile: false);
                     VFSFile2 info = new()
                     {
-                        libs = []
+                        libs = [],
+                        filetype = table.ftype switch
+                        {
+                            XsfType.SSF => 0xFFFFFF18,
+                            XsfType.DSF => 0xFFFFFF19,
+                            _ => 0
+                        }
                     };
                     foreach (XsfFile x in table.minixsfs)
                     {
@@ -374,7 +408,25 @@ namespace SSFExt
                         else
                         {
                             xsfmd5.Add(fmd5, xsffiles.Count);
-                            //add stuff to xsffiles here
+                            info.libs.Add(xsffiles.Count);
+                            xsffiles.Add(new VFSFile2
+                            {
+                                load_direct = false,
+                                source = xtable.minixsfs[0].filename,
+                                name = FindName(xtable.minixsfs[0], enc),
+                                filetype = GetBinOffset(xtable.minixsfs[0].headersect, xtable.ftype),
+                                file_start = (int)xtable.minixsfs[0].start,
+                                file_end = (int)xtable.minixsfs[0].end,
+                                dont_load_xsflibs = true
+                            });
+                        }
+                        if (!x.is_library)
+                        {
+                            info.name = FindName(x, enc);
+                        }
+                        if (info.libs.Count > 0 && !string.IsNullOrEmpty(info.name))
+                        {
+                            listfiles.Add(info);
                         }
                     }
                 }
@@ -384,11 +436,58 @@ namespace SSFExt
                 }
             }
 
+            if (add_direct_files)
+            {
+                if (xpattern.Value == XsfType.SSF || xpattern.Value == XsfType.ANY)
+                {
+                    foreach (string f in Directory.GetFiles(dir, "vgm68k.bin", SearchOption.AllDirectories))
+                    {
+                        xsffiles.Add(new VFSFile2
+                        {
+                            load_direct = true,
+                            name = "VGM/MOD/MDX 68K Driver",
+                            filetype = 0xFFFFFF1A,
+                            source = Path.GetFullPath(f)
+                        });
+                    }
+                    foreach (string f in Directory.GetFiles(dir, "*.mod", SearchOption.AllDirectories))
+                    {
+                        listfiles.Add(new VFSFile2
+                        {
+                            load_direct = true,
+                            name = Path.GetFileNameWithoutExtension(f),
+                            filetype = 0xFFFFFF1B,
+                            source = Path.GetFullPath(f)
+                        });
+                    }
+                    foreach (string f in Directory.GetFiles(dir, "*.vgm", SearchOption.AllDirectories))
+                    {
+                        listfiles.Add(new VFSFile2
+                        {
+                            load_direct = true,
+                            name = Path.GetFileNameWithoutExtension(f),
+                            filetype = 0xFFFFFF1C,
+                            source = Path.GetFullPath(f)
+                        });
+                    }
+                    foreach (string f in Directory.GetFiles(dir, "*.mdx", SearchOption.AllDirectories))
+                    {
+                        listfiles.Add(new VFSFile2
+                        {
+                            load_direct = true,
+                            name = Path.GetFileNameWithoutExtension(f),
+                            filetype = 0xFFFFFF1D,
+                            source = Path.GetFullPath(f)
+                        });
+                    }
+                }
+            }
+            xsffiles.AddRange(listfiles);
             return [.. xsffiles];
         }
 
         static XsfTable LoadFile(string filename, BinaryType? btype = null, XsfType? xtype = null, 
-            Encoding? enc = null, bool loadlibs = true, bool getmd5 = false, bool loadfile = true)
+            Encoding? enc = null, bool loadlibs = true, bool getmd5 = false, bool loadfile = true, bool naomi = true)
         {
             XsfTable xt = new()
             {
@@ -403,7 +502,7 @@ namespace SSFExt
                 {
                     btype = ftype switch
                     {
-                        //SSF
+                        //SSF, DSF
                         0x11465350 or 0x12465350 => (BinaryType?)BinaryType.MINIXSF,//not making a redundant loader for single xsf
                         _ => (BinaryType?)BinaryType.BIN,
                     };
@@ -416,7 +515,8 @@ namespace SSFExt
                         0x11465350 => (XsfType?)XsfType.SSF,
                         //DSF
                         0x12465350 => (XsfType?)XsfType.DSF,
-                        _ => (XsfType?)XsfType.SSF,//SSF by default
+                        < 0x80000 => (XsfType?)XsfType.SSF, //SSF max size
+                        _ => (XsfType?)XsfType.DSF,//Bigger than SSF is DSF by default, if GSF/other support added this needs to change
                     };
                 }
                 switch (btype)
@@ -459,7 +559,7 @@ namespace SSFExt
                                 xt.ram = new byte[0x80004];
                                 break;
                             case XsfType.DSF:
-                                xt.ram = new byte[0x200004];
+                                xt.ram = new byte[naomi ? 0x800004 : 0x200004];
                                 break;
                             default:
                                 Console.Error.WriteLine("Unsupported xSF type!");
@@ -701,7 +801,12 @@ namespace SSFExt
                 case BinaryType.BIN:
                     if (string.IsNullOrEmpty(fn[0]))
                     {
-                        fn[0] = Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".bin";
+                        fn[0] = xsfTable.ftype switch
+                        {
+                            XsfType.SSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".ssfbin",
+                            XsfType.DSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".dsfbin",
+                            _ => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".bin",
+                        };
                     }
                     try
                     {
@@ -814,7 +919,7 @@ namespace SSFExt
         }
 
         static byte[] RemoveLibTags(byte[] data, Encoding? enc = null, List<string>? liblines = null,
-    bool keeplibs = false, bool replacetags = true, Encoding? outenc = null, string tagnewline = "\n")
+            bool keeplibs = false, bool replacetags = true, Encoding? outenc = null, string tagnewline = "\n")
         {
             try
             {
@@ -882,6 +987,106 @@ namespace SSFExt
 
             string tagtext = "[TAG]" + string.Join(tagnewline, liblines);
             return outenc.GetBytes(tagtext);
+        }
+
+        static string FindName(XsfFile psfFile, Encoding? enc = null)
+        {
+            try
+            {
+                enc ??= Encoding.GetEncoding(psfFile.tag_encoding);
+            }
+            catch
+            {
+                //Console.Error.WriteLine("No encoding found for tags, autodetecting...");
+            }
+            try
+            {
+                enc ??= CharsetDetector.DetectFromBytes(psfFile.tags).Detected.Encoding;
+            }
+            catch
+            {
+                //Console.Error.WriteLine("No encoding could be autodetected, using UTF8!");
+                enc = Encoding.UTF8;
+            }
+            try
+            {
+                if (psfFile.tags == null || psfFile.tags.Length < 5)
+                {
+                    return Path.GetFileNameWithoutExtension(psfFile.filename);
+                }
+                BinaryReader br = new(new MemoryStream(psfFile.tags));
+                StreamReader sr = new(br.BaseStream, enc);
+                uint tagsig = br.ReadUInt32();
+                string lib = "";
+                string fname = "";
+                if (tagsig == 0x4741545B && br.ReadByte() == 0x5D)
+                {
+                    while (sr.Peek() >= 0)
+                    {
+                        try
+                        {
+                            lib = sr.ReadLine() ?? "";
+                            if (lib.StartsWith("title", StringComparison.OrdinalIgnoreCase))
+                            {
+                                fname = lib.Split('=', StringSplitOptions.RemoveEmptyEntries)[1];
+                            }
+                        }
+                        catch (Exception tx)
+                        {
+                            Console.Error.WriteLine("Exception: {0}", tx.Message);
+                            Console.Error.WriteLine("{0} was not a valid tag line", lib);
+                        }
+
+                    }
+                }
+                if (string.IsNullOrEmpty(fname))
+                {
+                    return Path.GetFileNameWithoutExtension(psfFile.filename); //if both are null returns null
+                }
+                else
+                {
+                    return fname;
+                }
+            }
+            catch (Exception cx)
+            {
+                Console.Error.WriteLine("Tag Field Exception: {0}", cx.Message);
+                try
+                {
+                    return Path.GetFileNameWithoutExtension(psfFile.filename);
+                }
+                catch
+                {
+                    return "Unknown";
+                }
+            }
+        }
+
+        static uint GetBinOffset(byte[] headersect, XsfType type, bool AddBase = true)
+        {
+            uint offset = 0;
+            if (AddBase) //this makes gsf easier because there are 2 entry points
+            {
+                offset = type switch
+                {
+                    XsfType.SSF => 0x05A00000,
+                    XsfType.DSF => 0xA0800000,
+                    _ => 0,
+                };
+            }
+            switch (type)
+            {
+                case XsfType.SSF:
+                case XsfType.DSF:
+                    if (headersect.Length < 4)
+                    {
+                        throw new ArgumentException("Header section must be at least 4 bytes long.");
+                    }
+                    return BitConverter.ToUInt32(headersect, 0) + offset;
+                default:
+                    throw new ArgumentException("Unsupported xSF type!");
+            }
+            //return 0;
         }
     }
 }
