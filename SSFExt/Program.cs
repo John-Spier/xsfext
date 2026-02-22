@@ -69,7 +69,7 @@ namespace SSFExt
         static void Main(string[] args)
         {
             VFSFile2[] v = GetVFSFiles(".\\SF3", "*.*", verbose: true);
-            Console.WriteLine($"{v} files found");
+            Console.WriteLine($"{v.Length} files found");
         }
 
         static byte[][] Tonext(byte[] ram)
@@ -424,10 +424,10 @@ namespace SSFExt
                         {
                             info.name = FindName(x, enc);
                         }
-                        if (info.libs.Count > 0 && !string.IsNullOrEmpty(info.name))
-                        {
-                            listfiles.Add(info);
-                        }
+                    }
+                    if (info.libs.Count > 0 && !string.IsNullOrEmpty(info.name))
+                    {
+                        listfiles.Add(info);
                     }
                 }
                 catch (Exception ex)
@@ -525,7 +525,7 @@ namespace SSFExt
                         xt.btype = BinaryType.BIN;
                         xt.ftype = xtype.Value;
                         br.BaseStream.Seek(0, SeekOrigin.Begin);
-                        xt.ram = br.ReadBytes((int)fs.Length);
+                        xt.ram = loadfile ? br.ReadBytes((int)fs.Length) : new byte[2048]; //LARGEST HEADER SIZE
                         switch (xtype.Value)
                         {
                             case XsfType.SSF:
@@ -566,26 +566,29 @@ namespace SSFExt
                                 break;
                         }
                         xt = LoadMiniXsf(filename, xt, enc, false, loadlibs, getmd5, loadfile);
-                        uint lowest = xt.minixsfs.Min(x => x.start);
-                        uint highest = xt.minixsfs.Max(x => x.end);
-                        byte[] mem = new byte[highest - lowest + xt.minixsfs.First().headersect.Length];
-                        Array.Copy(xt.ram, lowest, mem, xt.minixsfs.First().headersect.Length, highest - lowest);
-                        if (xt.minixsfs.First().headersect.Length == 4)
+                        if (loadfile)
                         {
-                            Array.Copy(BitConverter.GetBytes(lowest - 4), 0, mem, 0, 4);
+                            uint lowest = xt.minixsfs.Min(x => x.start);
+                            uint highest = xt.minixsfs.Max(x => x.end);
+                            byte[] mem = new byte[highest - lowest + xt.minixsfs.First().headersect.Length];
+                            Array.Copy(xt.ram, lowest, mem, xt.minixsfs.First().headersect.Length, highest - lowest);
+                            if (xt.minixsfs.First().headersect.Length == 4)
+                            {
+                                Array.Copy(BitConverter.GetBytes(lowest - 4), 0, mem, 0, 4);
+                            }
+                            else
+                            {
+                                Console.Error.WriteLine("Unsupported xSF Type - Header not 4 bytes!");
+                            }
+                            for (int i = 0; i < xt.minixsfs.Count; i++)
+                            {
+                                XsfFile xf = xt.minixsfs[i]; //foreach worked the last time
+                                xf.start -= lowest - (uint)xt.minixsfs.First().headersect.Length;
+                                xf.end -= lowest - (uint)xt.minixsfs.First().headersect.Length;
+                                xt.minixsfs[i] = xf;
+                            }
+                            xt.ram = mem;
                         }
-                        else
-                        {
-                           Console.Error.WriteLine("Unsupported xSF Type - Header not 4 bytes!");
-                        }
-                        for (int i = 0; i < xt.minixsfs.Count; i++)
-                        {
-                            XsfFile xf = xt.minixsfs[i]; //foreach worked the last time
-                            xf.start -= lowest - (uint)xt.minixsfs.First().headersect.Length;
-                            xf.end -= lowest - (uint)xt.minixsfs.First().headersect.Length;
-                            xt.minixsfs[i] = xf;
-                        }
-                        xt.ram = mem;
                         break;
                     default:
                         Console.Error.WriteLine("Unsupported filetype!");
