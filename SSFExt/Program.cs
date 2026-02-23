@@ -3,9 +3,27 @@ using UtfUnknown;
 using System.IO.Compression;
 using System.IO.Hashing;
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
+
 
 namespace SSFExt
 {
+    [JsonSourceGenerationOptions(
+    WriteIndented = true,
+    IncludeFields = true
+    //DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    )]
+    [JsonSerializable(typeof(XsfFile))]
+    [JsonSerializable(typeof(XsfTable))]
+    [JsonSerializable(typeof(VFSFile2))]
+    [JsonSerializable(typeof(VFSBinary2))]
+    [JsonSerializable(typeof(List<XsfFile>))]
+    [JsonSerializable(typeof(List<VFSFile2>))]
+    [JsonSerializable(typeof(List<int>))]
+    internal partial class JsonSerializationContext : JsonSerializerContext
+    {
+    }
+
     public enum BinaryType
     {
         ANY,
@@ -47,7 +65,7 @@ namespace SSFExt
         public string source;
         public string name;
         public uint filetype;
-        public int file_start;
+        public int file_start; //needed for seq/ton just in case
         public int file_end;
         public VFSBinary2 binary;
         public bool dont_load_xsflibs;
@@ -58,9 +76,8 @@ namespace SSFExt
         public byte[] name; //64
         public int size;
         public int padding;
-        public int file_size;
         public int addr;
-        public byte[] data;
+        //public byte[] data;
     }
 
 
@@ -68,8 +85,155 @@ namespace SSFExt
     {
         static void Main(string[] args)
         {
-            VFSFile2[] v = GetVFSFiles(".\\SF3", "*.*", verbose: true);
-            Console.WriteLine($"{v.Length} files found");
+
+            ExtractMergeVFS("PRI.VFS", BinaryType.MINIXSF);
+            //x.btype = BinaryType.XSF;
+            //SaveMiniXsf(x, [".\\VFSTEST\\FULL19.SSF"]);
+            //var v = GetVFSFiles(".\\SF3\\", "*.minissf");
+            //SaveVFSFile("PRI.VFS", v);
+        }
+
+        static XsfFile CreateMiniPSF(XsfTable lib, XsfTable psf, bool verbose = false, StreamWriter? con = null, byte[]? zerolib = null,
+            Encoding? outenc = null, int start_padding = -1, int end_padding = -1, bool savezero = true)
+        {
+            con ??= new(Console.OpenStandardOutput());
+            con.AutoFlush = true;
+            int lib_base, psf_base;
+            int h = HeaderSize(lib.ftype), k = HeaderSize(psf.ftype);
+            int change_start = int.MaxValue, change_end = int.MinValue, bytediff = 0;
+            uint lib_start = GetBinOffset(lib.ram, lib.ftype, false);//BitConverter.ToUInt32(lib.ram, 24);// % 0x20000000;
+            uint psf_start = GetBinOffset(psf.ram, psf.ftype, false);// % 0x20000000;
+            
+            //var context = new JsonSerializationContext();
+            var sourceFile = psf.minixsfs.LastOrDefault(x => !x.is_library);
+            
+            if (string.IsNullOrEmpty(sourceFile.filename))
+            {
+                throw new InvalidOperationException("No non-library XSF file found in the collection");
+            }
+            
+            XsfFile psf1 = sourceFile; // Structs are value types, no json needed
+            bool zlib = !(zerolib == null || zerolib.Length == 0);
+            if (lib_start <= psf_start)
+            {
+                psf_base = k;
+                lib_base = (int)(psf_start - lib_start) + h;
+            }
+            else
+            {
+                lib_base = h;
+                psf_base = (int)(lib_start - psf_start) + k;
+                change_start = h;
+            }
+
+            if (psf_base + psf.ram.Length > lib_base + lib.ram.Length)
+            {
+                change_end = psf.ram.Length;
+            }
+            if (start_padding == -1)
+            {
+                start_padding = h;
+            }
+            if (end_padding == -1)
+            {
+                end_padding = h;
+            }
+
+            if (verbose)
+            {
+                con.WriteLine($"Library: {FindName(lib.minixsfs.Last())} XSF: {FindName(psf1)}");
+                con.WriteLine($"Lib start/length: {lib_start}/{lib.ram.Length} XSF start/length: {psf_start}/{psf.ram.Length}");
+                con.WriteLine($"Lib/XSF base address: {lib_base}/{psf_base} XSF original start/end: {psf1.start}/{psf1.end}");// - psf.minipsfs.Last(x => !x.is_library).start}");
+            }
+
+
+            zerolib ??= [];
+            int nonzerocorr = 0;
+
+            if (change_start == int.MaxValue || change_end == int.MinValue)
+            {
+                for (int i = 0; i + lib_base < lib.ram.Length && i + psf_base < psf.ram.Length; i++)
+                {
+                    if (lib.ram[i + lib_base] != psf.ram[i + psf_base])
+                    {
+                        bytediff++;
+
+                        change_start = int.Min(change_start, i + psf_base);
+                        change_end = int.Max(change_end, i + psf_base + 1);
+                        //con.WriteLine($"{i + lib_base}/{i + psf_base}: {lib.ram[i + lib_base]}/{psf.ram[i + psf_base]}");
+                    }
+                    else if (lib.ram[i + lib_base] != 0)
+                    {
+                        nonzerocorr++;
+                        if (zlib && zerolib.Length > i + lib_base)
+                        {
+                            zerolib[i + lib_base] = lib.ram[i + lib_base];
+                        }
+                        //con.WriteLine($"OK: {i + lib_base}/{i + psf_base}: {lib.ram[i + lib_base]}/{psf.ram[i + psf_base]}");
+                    }
+                }
+            }
+
+            if (zlib && change_start - psf_base + lib_base <= zerolib.Length)
+            {
+                Array.Copy(lib.ram, 0, zerolib, 0, change_start - psf_base + lib_base);
+            }
+
+            if (zlib && change_end - psf_base + lib_base <= zerolib.Length && change_end - psf_base + lib_base >= 0)
+            {
+                Array.Copy(lib.ram, change_end - psf_base + lib_base, zerolib, change_end - psf_base + lib_base, zerolib.Length - (change_end - psf_base + lib_base));
+            }
+
+            if (verbose)
+            {
+                //con.WriteLine($"Lib start/length: {lib_start}/{lib.ram.Length} PSF start/length: {psf_start}/{psf.ram.Length}");
+                //con.WriteLine($"Lib/PSF base address: {lib_base}/{psf_base}");
+                con.WriteLine($"First/last changed addresses: {change_start}/{change_end}");
+                con.WriteLine($"Differences/nonzero correct/correct zero bytes: {bytediff}/{nonzerocorr}/{psf.ram.Length - (nonzerocorr + bytediff)}");
+                con.WriteLine($"Start/end of non-copied addresses in library due to no overlap: {change_start - psf_base + lib_base}/{change_end - psf_base + lib_base}");
+                //con.WriteLine();
+            }
+            //change_start -= change_start % 2048;
+            if (change_end > change_start)
+            {
+                Encoding? encoding = null;
+
+                try
+                {
+                    encoding = Encoding.GetEncoding(psf1.tag_encoding);
+                }
+                catch (Exception e)
+                {
+                    if (verbose)
+                    {
+                        con.WriteLine($"Encoding error {e.Message}, defaulting to UTF8");
+                    }
+                    encoding = null;
+                }
+                outenc ??= encoding;
+                psf1.start = (uint)(change_start - (change_start % start_padding));
+                psf1.end = (uint)int.Min(change_end + GetPadding(change_end, end_padding), psf.ram.Length);
+                if (verbose)
+                {
+                    con.WriteLine($"Header start/end: {(psf1.start - h + psf_start)}/{(psf1.end - h + psf_start)}");
+                    long hdrstart = GetBinOffset(psf1.headersect, psf.ftype);
+                    con.WriteLine($"Old Header Start: {hdrstart}");// Old Header End: {BitConverter.ToUInt32(psf1.headersect, 0x1C) + hdrstart}");
+                    con.WriteLine();
+                }
+                psf1.headersect = GetHeaderSect(psf1.start - (uint)h + psf_start, psf.ftype, false);
+                //Array.Copy(BitConverter.GetBytes(psf1.end - psf1.start), 0, psf1.headersect, 0x1C, 4);
+                psf1.tags = RemoveLibTags(psf1.tags, encoding, [$"_lib={Path.GetFileName(lib.minixsfs.Last().filename)}"], outenc: outenc);
+                psf1.modified = true;
+            }
+            else
+            {
+                psf1.start = (uint)k;
+                psf1.end = (uint)k;
+                psf1.modified = savezero;
+            }
+
+
+            return psf1;
         }
 
         static byte[][] Tonext(byte[] ram)
@@ -348,6 +512,7 @@ namespace SSFExt
             List<VFSFile2> listfiles = [];
             Dictionary<string, int> xsfmd5 = []; //key = md5 or filename, value = index in xsffiles
             con ??= new(Console.OpenStandardOutput());
+            con.AutoFlush = true;
             foreach (string file in Directory.GetFiles(dir, pattern, SearchOption.AllDirectories))
             {
                 try
@@ -397,10 +562,12 @@ namespace SSFExt
                             _ => 0
                         }
                     };
-                    foreach (XsfFile x in table.minixsfs)
+                    int primary_file = 1;
+                    foreach ((int idx, XsfFile x) in table.minixsfs.Index())
                     {
                         XsfTable xtable = LoadFile(x.filename, enc: enc, getmd5: usemd5, loadlibs: false);
                         string fmd5 = usemd5 ? xtable.minixsfs[0].md5 : xtable.minixsfs[0].filename;
+                        
                         if (xsfmd5.TryGetValue(fmd5, out int xsf))
                         {
                             info.libs.Add(xsf);
@@ -413,7 +580,7 @@ namespace SSFExt
                             {
                                 load_direct = false,
                                 source = xtable.minixsfs[0].filename,
-                                name = FindName(xtable.minixsfs[0], enc),
+                                name = Path.GetFileName(xtable.minixsfs[0].filename), //FindName(xtable.minixsfs[0], enc),
                                 filetype = GetBinOffset(xtable.minixsfs[0].headersect, xtable.ftype),
                                 file_start = (int)xtable.minixsfs[0].start,
                                 file_end = (int)xtable.minixsfs[0].end,
@@ -422,11 +589,13 @@ namespace SSFExt
                         }
                         if (!x.is_library)
                         {
+                            primary_file = -idx; //xsfmd5[fmd5];
                             info.name = FindName(x, enc);
                         }
                     }
                     if (info.libs.Count > 0 && !string.IsNullOrEmpty(info.name))
                     {
+                        info.libs.Add(primary_file);
                         listfiles.Add(info);
                     }
                 }
@@ -440,7 +609,7 @@ namespace SSFExt
             {
                 if (xpattern.Value == XsfType.SSF || xpattern.Value == XsfType.ANY)
                 {
-                    foreach (string f in Directory.GetFiles(dir, "vgm68k.bin", SearchOption.AllDirectories))
+                    foreach (string f in Directory.GetFiles(dir, "vgm68.bin", SearchOption.AllDirectories))
                     {
                         xsffiles.Add(new VFSFile2
                         {
@@ -533,8 +702,8 @@ namespace SSFExt
                                 var info = new XsfFile
                                 {
                                     filename = Path.GetFullPath(filename),
-                                    headersect = [.. xt.ram.Take(4)],
-                                    start = 4,
+                                    headersect = [.. xt.ram.Take(HeaderSize(xtype.Value))],
+                                    start = (uint)HeaderSize(xtype.Value),
                                     end = (uint)fs.Length,
                                     crc = 0,
                                     reserved_area = [],
@@ -653,9 +822,9 @@ namespace SSFExt
                 {
                     case XsfType.SSF:
                     case XsfType.DSF:
-                        info.headersect = [.. tempram.Take(4)];
-                        info.start = BitConverter.ToUInt32(info.headersect, 0) + 4;
-                        info.end = uint.Min(info.start + (uint)(tempram.Length - 4), (uint)xtab.ram.Length);
+                        info.headersect = [.. tempram.Take(HeaderSize(xtab.ftype))];
+                        info.start = BitConverter.ToUInt32(info.headersect, 0) + (uint)HeaderSize(xtab.ftype);
+                        info.end = uint.Min(info.start + (uint)(tempram.Length - HeaderSize(xtab.ftype)), (uint)xtab.ram.Length);
                         break;
                     default:
                         Console.Error.WriteLine("Unsupported xSF type!");
@@ -1074,22 +1243,291 @@ namespace SSFExt
                 {
                     XsfType.SSF => 0x05A00000,
                     XsfType.DSF => 0xA0800000,
-                    _ => 0,
+                    _ => 0
                 };
             }
             switch (type)
             {
                 case XsfType.SSF:
                 case XsfType.DSF:
-                    if (headersect.Length < 4)
+                    if (headersect.Length < HeaderSize(type))
                     {
-                        throw new ArgumentException("Header section must be at least 4 bytes long.");
+                        throw new ArgumentException($"Header section must be at least {HeaderSize(type)} bytes long.");
                     }
                     return BitConverter.ToUInt32(headersect, 0) + offset;
                 default:
                     throw new ArgumentException("Unsupported xSF type!");
             }
             //return 0;
+        }
+
+        static byte[] GetHeaderSect(uint offset, XsfType type, bool SubtractOffset = false)
+        {
+            if (SubtractOffset)
+            {
+                offset -= type switch
+                {
+                    XsfType.SSF => 0x05A00000,
+                    XsfType.DSF => 0xA0800000,
+                    _ => 0
+                };
+            }
+            return type switch
+            {
+                XsfType.SSF or XsfType.DSF => BitConverter.GetBytes(offset),
+                _ => throw new ArgumentException("Unsupported xSF type!"),
+            };
+        }
+        static int GetPadding(int base_addr, int sector = 2048)
+        {
+            int base_pad = sector - (base_addr % sector);
+            if (base_pad == sector)
+            {
+                return 0;
+            }
+            else
+            {
+                return base_pad;
+            }
+        }
+
+        static void SaveVFSFile(string filename, VFSFile2[] files, Encoding? encout = null, bool naomi = true)
+        {
+            encout ??= Encoding.ASCII;
+            BinaryWriter writer = new(new FileStream(filename, FileMode.Create));
+            int base_addr = 12 + (files.Length * 84);
+            int base_pad = GetPadding(base_addr);
+            int addr = base_addr + base_pad;
+
+            for (int i = 0; i < files.Length; i++)
+            {
+                files[i].libs ??= [];
+                if (files[i].load_direct)
+                {
+                    files[i].binary.size = (int)new FileInfo(files[i].source).Length;
+                    files[i].file_start = 0;
+                    files[i].file_end = files[i].binary.size;
+                }
+                else if (files[i].libs.Count > 0)
+                {
+                    //files[i].binary.data = [.. files[i].libs.SelectMany(BitConverter.GetBytes)];
+                    files[i].binary.size = files[i].libs.Count * sizeof(int); //files[i].binary.data.Length;
+                }
+                else
+                {
+                    files[i].binary.size = files[i].file_end - files[i].file_start;
+                }
+                files[i].binary.name = new byte[64];
+                encout.GetEncoder().Convert(files[i].name.ToCharArray(), 0, files[i].name.Length, files[i].binary.name, 0, files[i].binary.name.Length - 1, true, out _, out _, out _);
+                files[i].binary.addr = addr;
+                files[i].binary.padding = GetPadding(files[i].binary.size);
+                addr += files[i].binary.size + files[i].binary.padding;
+            }
+
+            writer.Write(0x00534656); //VFS
+            writer.Write(files.Length);
+            writer.Write((base_addr + base_pad) / 2048);
+
+            foreach (VFSFile2 hfile in files)
+            {
+                writer.Write(hfile.binary.name);
+                writer.Write(hfile.binary.size);
+                writer.Write(hfile.binary.addr / 2048);
+                writer.Write((hfile.binary.size + hfile.binary.padding) / 2048);
+                writer.Write(hfile.binary.addr);
+                writer.Write(hfile.filetype);
+            }
+            writer.Write(new byte[base_pad]);
+
+            foreach (VFSFile2 f in files)
+            {
+                if (f.load_direct)
+                {
+                    //byte[] direct_vfs = File.ReadAllBytes(f.source);
+                    writer.Write(File.ReadAllBytes(f.source));
+                }
+                else if (f.libs.Count > 0)
+                {
+                    writer.Write(f.libs.SelectMany(BitConverter.GetBytes).ToArray());
+                }
+                else
+                {
+                    //XsfTable table = LoadFile(f.source, loadlibs: !f.dont_load_xsflibs, naomi: naomi);
+                    writer.Write(LoadFile(f.source, loadlibs: !f.dont_load_xsflibs, naomi: naomi).ram, f.file_start, f.binary.size);
+                }
+                writer.Write(new byte[f.binary.padding]);
+            }
+            writer.Flush();
+            writer.Close();
+            writer.Dispose();
+
+            return;
+        }
+
+        static int HeaderSize(XsfType type)
+        {
+            return type switch
+            {
+                XsfType.SSF or XsfType.DSF => 4,
+                _ => 0
+            };
+        }
+
+        static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.XSF, 
+            string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
+            bool extract_all = false) //, bool smallest_lib = true) // string? outdir = null)
+        {
+            enc ??= Encoding.ASCII;
+            encout ??= Encoding.UTF8;
+            BinaryReader vbr = new(new FileStream(filename, FileMode.Open));
+            if (vbr.ReadUInt32() != 0x00534656)
+            {
+                Console.Error.WriteLine("Not a valid VFS file!");
+                return;
+            }
+            int filecount = vbr.ReadInt32();
+            bool[] dont_extract = new bool[filecount];
+            //uint[] crcs = new uint[filecount];
+            //int base_addr = vbr.ReadInt32() * 2048;
+            vbr.ReadInt32(); //base addr, not needed since libs have absolute addresses
+            int done_out_files = 0;
+            if (!extract_all)
+            {
+                for (int i = 0; i < filecount; i++)
+                {
+                    try
+                    {
+                        vbr.BaseStream.Seek(12 + (i * 84), SeekOrigin.Begin);
+                        string fname = enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0');
+                        int bsize = vbr.ReadInt32();
+                        int saddr = vbr.ReadInt32();
+                        int ssize = vbr.ReadInt32();
+                        int baddr = vbr.ReadInt32();
+                        uint ftype = vbr.ReadUInt32();
+                        if (ftype == 0xFFFFFF18 || ftype == 0xFFFFFF19)
+                        {
+                            uint lowest = uint.MaxValue;
+                            uint highest = uint.MinValue;
+                            dont_extract[i] = true;
+                            vbr.BaseStream.Seek(baddr, SeekOrigin.Begin);
+                            XsfTable xsf = new()
+                            {
+                                btype = type,
+                                ftype = ftype switch
+                                {
+                                    0xFFFFFF18 => XsfType.SSF,
+                                    0xFFFFFF19 => XsfType.DSF,
+                                    _ => XsfType.ANY
+                                },
+                                minixsfs = []
+                            };
+                            int[] ints = new int[(bsize - 4) / 4];
+                            string[] strings = new string[ints.Length];
+                            vbr.BaseStream.Seek(baddr + (bsize - 4), SeekOrigin.Begin);
+                            int primary_lib = -vbr.ReadInt32();
+
+                            for (int j = 0; j < ints.Length; j++)
+                            {
+                                vbr.BaseStream.Seek(baddr + (j * 4), SeekOrigin.Begin);
+                                ints[j] = vbr.ReadInt32();
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84) + 80, SeekOrigin.Begin);
+                                uint libftype = vbr.ReadUInt32();
+                                if (libftype < lowest)
+                                {
+                                    lowest = libftype;
+                                }
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84) + 64, SeekOrigin.Begin);
+                                uint libend = vbr.ReadUInt32() + libftype;
+                                if (libend > highest)
+                                {
+                                    highest = libend;
+                                }
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84), SeekOrigin.Begin);
+
+                                strings[j] = xsf.ftype switch
+                                {
+                                    XsfType.SSF => j == primary_lib ? fname + ".minissf"
+                                    : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".ssflib",
+                                    XsfType.DSF => j == primary_lib ? fname + ".minidsf"
+                                    : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".dsflib",
+                                    _ => strings[j]
+                                };
+                            }
+                            xsf.ram = new byte[highest - lowest + HeaderSize(xsf.ftype)];
+                            
+                            for (int j = 0; j < ints.Length; j++)
+                            {
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84), SeekOrigin.Begin);
+                                //string libname = enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0');
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84) + 76, SeekOrigin.Begin);
+                                int seekaddr = vbr.ReadInt32();
+                                uint hsaddr = vbr.ReadUInt32();
+                                uint lib_load_addr = hsaddr - lowest + (uint)HeaderSize(xsf.ftype);
+                                vbr.BaseStream.Seek(12 + (ints[j] * 84) + 64, SeekOrigin.Begin);
+                                int rsize = vbr.ReadInt32();
+                                vbr.BaseStream.Seek(seekaddr, SeekOrigin.Begin);
+
+                                vbr.Read(xsf.ram, (int)lib_load_addr, rsize);
+                                byte[] hsect = GetHeaderSect(hsaddr, xsf.ftype, true);
+                                /*if (!dont_extract[ints[j]])
+                                {
+                                    byte[] crcram = new byte[rsize + HeaderSize(xsf.ftype)];
+                                    Array.Copy(hsect, 0, crcram, 0, HeaderSize(xsf.ftype));
+                                    Array.Copy(xsf.ram, lib_load_addr, crcram, HeaderSize(xsf.ftype), rsize);
+                                    crcs[ints[j]] = BitConverter.ToUInt32(Crc32.Hash(crcram));
+                                }*/
+                                byte[] tags = encout.GetBytes("[TAG]");
+                                if (j < 1 || j > primary_lib)
+                                {
+                                    //tags = encout.GetBytes("[TAG]");
+                                }
+                                else if (j < primary_lib)
+                                {
+                                    tags = encout.GetBytes($"[TAG]_lib={strings[j - 1]}");
+                                }
+                                else if (j == primary_lib)
+                                {
+                                    List<string> liblines = [];
+                                    liblines.Add($"_lib={strings[j - 1]}");
+                                    for (int k = j + 1; k < ints.Length; k++)
+                                    {
+                                        liblines.Add($"_lib{k - j + 1}={strings[k]}");
+                                    }
+                                    tags = encout.GetBytes("[TAG]" + string.Join("\n", liblines));
+                                }
+                                //xsf.minixsfs ??= [];
+                                xsf.minixsfs.Add(new()
+                                {
+                                    filename = strings[j],
+                                    headersect = hsect,
+                                    start = lib_load_addr,
+                                    end = lib_load_addr + (uint)rsize,
+                                    //crc = crcs[ints[j]],
+                                    is_library = j != primary_lib,
+                                    modified = true,
+                                    tag_encoding = encout.WebName,// ?? "utf-8",
+                                    tags = tags
+                                });
+                                dont_extract[ints[j]] = true;
+                            }
+                            outfiles ??= [];
+                            if (done_out_files <= outfiles.Length)
+                            {
+                                SaveMiniXsf(xsf, outfiles[done_out_files..]);
+                            }
+                            else
+                            {
+                                SaveMiniXsf(xsf, outfiles);
+                            }
+                            done_out_files += xsf.minixsfs.Count;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine("Error processing file {0}: {1}", i, ex.Message);
+                    }
+                }
+            }
         }
     }
 }
