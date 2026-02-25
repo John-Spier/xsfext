@@ -85,15 +85,110 @@ namespace SSFExt
     {
         static void Main(string[] args)
         {
+            try
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                if (args.Length > 0)
+                {
+                    string options = string.Empty;
+                    Encoding? encoding;
+                    Encoding? encout;
+                    XsfType? type;
+                    BinaryType? binaryin;
+                    BinaryType? binaryout;
+                    XsfTable conv;
+                    int a = 0;
+                    string pattern = "*.*";
+                    bool naomi = true;
+                    //bool autoname = false;
+                    switch (args[0].ToLowerInvariant())
+                    {
+                        case "-f": //CONVERT FORMAT/TAGGER
+                            if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                a = 3;
+                                options = args[1][2..]; //: is never used
+                            }
+                            else if (args.Length > 2)
+                            {
+                                SaveMiniXsf(LoadFile(Path.GetFullPath(args[1])), args[2..], autoname: true);
+                                return;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                            encoding = GetEncoding(options);
+                            encout = GetEncodingOut(options);
+                            type = GetXsfIn(options);
+                            binaryin = GetBinaryIn(options);
+                            binaryout = GetBinaryOut(options);
+                            naomi = !options.Contains('N');
+                            conv = LoadFile(Path.GetFullPath(args[a - 1]), binaryin, type, encoding, naomi: naomi);
+                            if (options.Contains('#'))
+                            {
+                                int idx = conv.minixsfs.FindLastIndex(x => !x.is_library);
+                                if (idx != -1)
+                                {
+                                    var temp = conv.minixsfs[idx];
+                                    temp.modified = true;
+                                    temp.tags = RemoveLibTags([], encoding, [.. args[(a + 1)..]], outenc: encout);
+                                    conv.minixsfs[idx] = temp;
+                                }
+                            }
+                            else if (options.Contains('!'))
+                            {
+                                int idx = conv.minixsfs.FindLastIndex(x => !x.is_library);
+                                if (idx != -1)
+                                {
+                                    var temp = conv.minixsfs[idx];
+                                    temp.modified = true;
+                                    temp.tags = RemoveLibTags(conv.minixsfs.LastOrDefault(x => !x.is_library).tags, encoding, [.. args[(a + 1)..]], true, true, encout);
+                                    conv.minixsfs[idx] = temp;
+                                }
+                            }
+                            else if (options.Contains('@'))
+                            {
+                                int idx = conv.minixsfs.FindLastIndex(x => !x.is_library);
+                                if (idx != -1)
+                                {
+                                    var temp = conv.minixsfs[idx];
+                                    temp.modified = true;
+                                    temp.tags = RemoveLibTags(conv.minixsfs.LastOrDefault(x => !x.is_library).tags, encoding, [.. args[(a + 1)..]], true, false, encout);
+                                    conv.minixsfs[idx] = temp;
+                                }
+                            }
+                            if (binaryout.HasValue)
+                            {
+                                conv.btype = binaryout.Value;
+                            }
+                            SaveMiniXsf(conv, args[a..], enc: encout, autoname: !binaryout.HasValue);
+                            return;
+                        case "-v": //XSF SET TO VFS/JSON/DIR
+                            VFSFile2[] files = [];
+                            if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                a = 3;
+                                options = args[1][2..];
 
-            ExtractMergeVFS("PRI.VFS", BinaryType.MINIXSF);
-            //x.btype = BinaryType.XSF;
-            //SaveMiniXsf(x, [".\\VFSTEST\\FULL19.SSF"]);
-            //var v = GetVFSFiles(".\\SF3\\", "*.minissf");
-            //SaveVFSFile("PRI.VFS", v);
+                            }
+                            else if (args.Length > 2)
+                            {
+                                a = 2;
+                            }
+                            
+                            return;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.ToString());
+            }
+
         }
 
-        static XsfFile CreateMiniPSF(XsfTable lib, XsfTable psf, bool verbose = false, StreamWriter? con = null, byte[]? zerolib = null,
+        static XsfFile CreateMiniXSF(XsfTable lib, XsfTable psf, bool verbose = false, StreamWriter? con = null, byte[]? zerolib = null,
             Encoding? outenc = null, int start_padding = -1, int end_padding = -1, bool savezero = true)
         {
             con ??= new(Console.OpenStandardOutput());
@@ -130,11 +225,11 @@ namespace SSFExt
             {
                 change_end = psf.ram.Length;
             }
-            if (start_padding == -1)
+            if (start_padding < 1)
             {
                 start_padding = h;
             }
-            if (end_padding == -1)
+            if (end_padding < 1)
             {
                 end_padding = h;
             }
@@ -211,8 +306,15 @@ namespace SSFExt
                     encoding = null;
                 }
                 outenc ??= encoding;
-                psf1.start = (uint)(change_start - (change_start % start_padding));
-                psf1.end = (uint)int.Min(change_end + GetPadding(change_end, end_padding), psf.ram.Length);
+                if (start_padding > 0)
+                {
+                    psf1.start = (uint)(change_start - (change_start % start_padding));
+                }
+                if (end_padding > 0)
+                {
+                    psf1.end = (uint)int.Min(change_end + GetPadding(change_end, end_padding), psf.ram.Length);
+                }
+                
                 if (verbose)
                 {
                     con.WriteLine($"Header start/end: {(psf1.start - h + psf_start)}/{(psf1.end - h + psf_start)}");
@@ -236,274 +338,77 @@ namespace SSFExt
             return psf1;
         }
 
-        static byte[][] Tonext(byte[] ram)
+        static void GetMiniXSFsFromDir(string path, string libpath, string? zerolib = null, bool verbose = false, StreamWriter? con = null,
+            bool padend = false, string pattern = "*.*", Encoding? enc = null, Encoding? outenc = null, SearchOption so = SearchOption.AllDirectories)
         {
-            ArgumentNullException.ThrowIfNull(ram);
-            int fisz = ram.Length;
-            if (fisz == 0) return [];
-
-            var extracted = new List<byte[]>();
-            int offset = 0;
-            int[] samplesize = [2, 1];
-            int[] unitdatasize = [0x12, 0x0A, 0x0A, 0x04];
-            int layersize = 0x20;
-
-            static ushort ReadU16BE(byte[] b, int i) => (ushort)((b[i] << 8) | b[i + 1]);
-            static uint ReadU32BE(byte[] b, int i) => ((uint)b[i] << 24) | ((uint)b[i + 1] << 16) | ((uint)b[i + 2] << 8) | b[i + 3];
-
-            try
+            con ??= new(Console.OpenStandardOutput());
+            con.AutoFlush = true;
+            XsfTable lib = LoadFile(libpath, enc: enc);
+            List<XsfFile> files = [];
+            byte[] bytes;
+            int endpad = padend ? -1 : 1;
+            if (string.IsNullOrEmpty(zerolib))
             {
-                while (offset < fisz)
+                bytes = [];
+                zerolib = Path.GetFileName(libpath);
+            }
+            else
+            {
+                bytes = new byte[lib.ram.Length];
+                zerolib = Path.GetFileName(zerolib);
+            }
+            if (lib.minixsfs.Count > 0)
+            {
+                var last = lib.minixsfs[^1];
+                last.filename = zerolib;
+                lib.minixsfs[^1] = last;
+            }
+            foreach (string f in Directory.EnumerateFiles(path, pattern, so))
+            {
+                if (pattern == "*.*" &&
+                    !(Path.GetExtension(f).EndsWith("sf", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(f).EndsWith("sfbin", StringComparison.OrdinalIgnoreCase)))
                 {
-                    // linear scan for a potential offmix value (two-byte BE) at any alignment
-                    int pos = -1;
-                    for (int p = offset; p + 2 <= fisz; p++)
-                    {
-                        int candidate = ReadU16BE(ram, p);
-                        if (candidate >= 0x000A && candidate < 0x0108)
-                        {
-                            pos = p;
-                            break;
-                        }
-                    }
-
-                    if (pos < 0) break;
-
-                    // need at least 8 bytes for offmix, offvl, offpeg, offplfo
-                    if (pos + 8 > fisz)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    int offmix = ReadU16BE(ram, pos);
-                    int offvl = ReadU16BE(ram, pos + 2);
-                    int offpeg = ReadU16BE(ram, pos + 4);
-                    int offplfo = ReadU16BE(ram, pos + 6);
-
-                    int nvoices = (offmix - 8) / 2;
-                    if (nvoices <= 0)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    // ensure voice offsets are present
-                    if (pos + 8 + 2 * nvoices > fisz)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    ushort[] offvoices = new ushort[nvoices];
-                    for (int i = 0; i < nvoices; i++)
-                    {
-                        offvoices[i] = ReadU16BE(ram, pos + 8 + 2 * i);
-                    }
-
-                    // build offset list
-                    int totalOffsets = 4 + offvoices.Length;
-                    int[] offsetList = new int[totalOffsets];
-                    offsetList[0] = offmix;
-                    offsetList[1] = offvl;
-                    offsetList[2] = offpeg;
-                    offsetList[3] = offplfo;
-                    for (int i = 0; i < offvoices.Length; i++) offsetList[4 + i] = offvoices[i];
-
-                    // compute diffs and check monotonic sequence (all diffs > 0)
-                    int[] diffs = new int[totalOffsets - 1];
-                    bool monotonic = true;
-                    for (int i = 0; i < diffs.Length; i++)
-                    {
-                        diffs[i] = offsetList[i + 1] - offsetList[i];
-                        if (diffs[i] <= 0) { monotonic = false; break; }
-                    }
-
-                    if (!monotonic)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    // check deltas consistency: first 4 diffs mod unitdatasize == 0,
-                    // remaining diffs mod layersize == 4
-                    bool deltasConsistent = true;
-                    for (int i = 0; i < diffs.Length; i++)
-                    {
-                        if (i < 4)
-                        {
-                            if (diffs[i] % unitdatasize[i] != 0) { deltasConsistent = false; break; }
-                        }
-                        else
-                        {
-                            if (diffs[i] % layersize != 4) { deltasConsistent = false; break; }
-                        }
-                    }
-
-                    if (!deltasConsistent)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    uint offtonemax = 0;
-                    int tonemaxsize = 0;
-
-                    // loop through voices and layers
-                    bool boundsProblem = false;
-                    foreach (ushort offvoice in offvoices)
-                    {
-                        int voiceBase = pos + offvoice;
-                        // need at least voiceBase+3 to read signed byte at +2
-                        if (voiceBase + 3 > fisz) { boundsProblem = true; break; }
-
-                        sbyte nlayersSigned = (sbyte)ram[voiceBase + 2];
-                        int nlayers = nlayersSigned + 1;
-                        if (nlayers < 0) { boundsProblem = true; break; }
-
-                        for (int ilayer = 0; ilayer < nlayers; ilayer++)
-                        {
-                            long layerBaseLong = voiceBase + 4L + layersize * ilayer;
-                            if (layerBaseLong + 10 > fisz) { boundsProblem = true; break; }
-
-                            int layerBase = (int)layerBaseLong;
-                            uint offtone = ReadU32BE(ram, layerBase + 2) & 0x0007FFFFu;
-                            if (offtone > offtonemax)
-                            {
-                                offtonemax = offtone;
-                                int pcm8b = (ram[layerBase + 3] >> 4) & 0x1;
-                                int lengthSamples = ReadU16BE(ram, layerBase + 8);
-                                tonemaxsize = samplesize[pcm8b] * lengthSamples;
-                            }
-                        }
-                        if (boundsProblem) break;
-                    }
-
-                    if (boundsProblem)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-
-                    // compute total size and clamp to remaining bytes
-                    long totalSizeLong = (long)offtonemax + tonemaxsize;
-                    if (totalSizeLong <= 0)
-                    {
-                        offset = pos + 1;
-                        continue;
-                    }
-                    int maxAvailable = fisz - pos;
-                    int totalSize = (int)Math.Min(totalSizeLong, maxAvailable);
-
-                    // extract bytes
-                    byte[] seg = new byte[totalSize];
-                    Array.Copy(ram, pos, seg, 0, totalSize);
-                    extracted.Add(seg);
-
-                    // advance offset to last byte of tone data (as in original)
-                    offset = pos + totalSize - 1;
-                    offset++;
+                    continue;
                 }
+                if (verbose)
+                {
+                    con.WriteLine($"Loading {f}...");
+                }
+                XsfTable p = LoadFile(f, enc: enc);
+                p.btype = BinaryType.MINIXSF;
+                XsfFile psf = CreateMiniXSF(lib, p, verbose, con, bytes, outenc, 0, endpad);
+                psf.tags = RemoveLibTags(psf.tags, enc, [$"_lib={zerolib}"], outenc: outenc);
+                File.Move(f, Path.Join(path, Path.GetFileNameWithoutExtension(f) + ".BAK"));
+                p.minixsfs.Add(psf);
+                files.Add(psf);
+                SaveMiniXsf(p, [Path.Join(path, Path.GetFileNameWithoutExtension(f) + p.ftype switch {
+                    XsfType.SSF => ".minissf",
+                    XsfType.DSF => ".minidsf",
+                    _ => ".minixsf"
+                })], enc: outenc);
             }
-            catch
+            if (bytes.Length > 0)
             {
-                // on any error return whatever was found so far
-                return [.. extracted];
+                lib.ram = bytes;
+                if (lib.minixsfs.Count > 0)
+                {
+                    var last = lib.minixsfs[^1];
+                    last.modified = true;
+                    lib.minixsfs[^1] = last;
+                }
+                //lib.minixsfs.Last().modified = true;
+                lib.btype = BinaryType.XSF;
+                SaveMiniXsf(lib, [Path.Join(path, zerolib)], enc: outenc);
             }
-
-            return [.. extracted];
+            files.Sort((x, y) => (x.end - x.start).CompareTo(y.end - y.start));
+            foreach (XsfFile pf in files)
+            {
+                con.WriteLine($"{Path.GetFileName(pf.filename)} size: {pf.end - pf.start}");
+            }
         }
 
-        static byte[][] Seqext(byte[] ram)
-        {
-            ArgumentNullException.ThrowIfNull(ram);
-            int fisz = ram.Length;
-            var extracted = new List<byte[]>();
-
-            // build command length table (256 entries)
-            int[] comlen = new int[256];
-            for (int i = 0; i < 0x80; i++) comlen[i] = 5;
-            int idx = 0x80;
-            comlen[idx++] = 1; comlen[idx++] = 4; comlen[idx++] = 2; comlen[idx++] = 1;
-            for (int i = 0; i < 0x1C; i++) comlen[idx++] = 1;
-            for (int i = 0; i < 0x20; i++) comlen[idx++] = 4;
-            for (int i = 0; i < 0x30; i++) comlen[idx++] = 3;
-            for (int i = 0; i < 0x10; i++) comlen[idx++] = 1;
-
-            static ushort ReadU16BE(byte[] b, int i) => (ushort)((b[i] << 8) | b[i + 1]);
-            static uint ReadU32BE(byte[] b, int i) => ((uint)b[i] << 24) | ((uint)b[i + 1] << 16) | ((uint)b[i + 2] << 8) | b[i + 3];
-
-            try
-            {
-                // linear scan every possible offset (safe; exact validation follows)
-                for (int pos = 0; pos + 6 <= fisz; pos++)
-                {
-                    // read potential header values (big-endian)
-                    ushort ntrack = ReadU16BE(ram, pos);
-                    uint ftrack = ReadU32BE(ram, pos + 2);
-
-                    // test 1: basic sanity of track count and first-track offset
-                    if (!(ntrack > 0 && ntrack < 128 && 4 * ntrack + 2 == ftrack))
-                        continue;
-
-                    // location of last track offset (table starts at pos+2, entries are 4 bytes)
-                    int lastTrackIndexOffset = pos + 2 + 4 * (ntrack - 1);
-                    if (lastTrackIndexOffset + 4 > fisz)
-                        continue;
-
-                    uint atrack = ReadU32BE(ram, lastTrackIndexOffset);
-
-                    // test 2: ensure last-track header fits in file
-                    if ((long)pos + atrack + 6 >= fisz)
-                        continue;
-
-                    // read ntmp and aseq from last track header
-                    int ntmpOff = pos + (int)atrack + 2;
-                    int aseqOff = pos + (int)atrack + 4;
-                    if (ntmpOff + 2 > fisz || aseqOff + 2 > fisz)
-                        continue;
-
-                    ushort ntmp = ReadU16BE(ram, ntmpOff);
-                    ushort aseq = ReadU16BE(ram, aseqOff);
-
-                    int offseq = pos + (int)atrack + aseq;
-
-                    // test 3: tempo offset consistency
-                    if (!(offseq < fisz && 8 * ntmp + 0x8 == aseq))
-                        continue;
-
-                    // walk commands until end-of-track (0x83) or out-of-bounds
-                    int walk = offseq;
-                    while (walk < fisz)
-                    {
-                        int com = ram[walk];
-                        int step = comlen[com]; // safe: com is 0..255, table has 256 entries
-                        walk += step;
-                        if (com == 0x83) break;
-                    }
-
-                    if (walk <= pos || walk > fisz)
-                        continue;
-
-                    int length = walk - pos;
-                    var seg = new byte[length];
-                    Array.Copy(ram, pos, seg, 0, length);
-                    extracted.Add(seg);
-
-                    // advance pos to last byte of extracted chunk (mimic original behaviour)
-                    pos = walk - 1;
-                }
-            }
-            catch
-            {
-                // return whatever we found so far on error
-                return [.. extracted];
-            }
-
-            return [.. extracted];
-        }
-
-        static VFSFile2[] GetVFSFiles(string dir, string pattern = "*.ssf", Encoding? enc = null, 
+        static VFSFile2[] GetVFSFiles(string dir, string pattern = "*.*", Encoding? enc = null, 
             bool verbose = false, StreamWriter? con = null, bool usemd5 = true, XsfType? xpattern = null,
             bool add_direct_files = true) //BinaryType? bpattern = null,
         {
@@ -957,13 +862,29 @@ namespace SSFExt
             return [];
         }
 
-        static int SaveMiniXsf(XsfTable xsfTable, string[]? fn = null, int xn = -1, Encoding? enc = null)
+        static int SaveMiniXsf(XsfTable xsfTable, string[]? fn = null, int xn = -1, Encoding? enc = null, bool overwrite = true, bool autoname = false)
         {
             if (xn == -1)
             {
                 xn = xsfTable.minixsfs.FindLastIndex(x => !x.is_library);
             }
             fn ??= [];
+            if (autoname && fn.Length > 0)
+            {
+                if (fn[0].EndsWith("bin"))
+                {
+                    xsfTable.btype = BinaryType.BIN;
+                }
+                if (fn[0].EndsWith("sf"))
+                {
+                    xsfTable.btype = BinaryType.XSF;
+                }
+                if (fn[0].EndsWith(".minissf") || fn[0].EndsWith(".minidsf"))
+                {
+                    xsfTable.btype = BinaryType.MINIXSF;
+                }
+            }
+
             if (fn.Length < xsfTable.minixsfs.Count)
             {
                 Array.Resize(ref fn, xsfTable.minixsfs.Count);
@@ -982,8 +903,12 @@ namespace SSFExt
                     }
                     try
                     {
-                        File.WriteAllBytes(fn[0], xsfTable.ram);
-                        return 1;
+                        if (overwrite || !File.Exists(fn[0]))
+                        {
+                            File.WriteAllBytes(fn[0], xsfTable.ram);
+                            return 1;
+                        }
+                        return 0;
                     }
                     catch (Exception ex)
                     {
@@ -1014,15 +939,19 @@ namespace SSFExt
                         xf.tags = RemoveLibTags(xf.tags, e);
                         xf.start = (uint)xf.headersect.Length;
                         xf.end = (uint)xsfTable.ram.Length;
-                        if (SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, fn[0]))
+                        if (overwrite || !File.Exists(fn[0]))
                         {
-                            return 1;
+                            if (SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, fn[0]))
+                            {
+                                return 1;
+                            }
+                            else
+                            {
+                                Console.Error.WriteLine("Error saving xSF file!");
+                                return 0;
+                            }
                         }
-                        else
-                        {
-                            Console.Error.WriteLine("Error saving xSF file!");
-                            return 0;
-                        }
+                        return 0;
                     }
                     catch (Exception ex) 
                     {
@@ -1034,7 +963,8 @@ namespace SSFExt
                     int i = 0;
                     foreach (XsfFile xf in xsfTable.minixsfs.Where(x => x.modified))
                     {
-                        if (SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i]))
+                        if ((overwrite || File.Exists(string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i])) && 
+                            SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i]))
                         {
                             i++;
                         }
@@ -1375,10 +1305,11 @@ namespace SSFExt
 
         static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.XSF, 
             string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
-            bool extract_all = false) //, bool smallest_lib = true) // string? outdir = null)
+            bool extract_all = false, bool overwrite = false) //, bool smallest_lib = true) // string? outdir = null)
         {
             enc ??= Encoding.ASCII;
             encout ??= Encoding.UTF8;
+            outfiles ??= [];
             BinaryReader vbr = new(new FileStream(filename, FileMode.Open));
             if (vbr.ReadUInt32() != 0x00534656)
             {
@@ -1404,7 +1335,7 @@ namespace SSFExt
                         int ssize = vbr.ReadInt32();
                         int baddr = vbr.ReadInt32();
                         uint ftype = vbr.ReadUInt32();
-                        if (ftype == 0xFFFFFF18 || ftype == 0xFFFFFF19)
+                        if (!dont_extract[i] && (ftype == 0xFFFFFF18 || ftype == 0xFFFFFF19))
                         {
                             uint lowest = uint.MaxValue;
                             uint highest = uint.MinValue;
@@ -1469,13 +1400,6 @@ namespace SSFExt
 
                                 vbr.Read(xsf.ram, (int)lib_load_addr, rsize);
                                 byte[] hsect = GetHeaderSect(hsaddr, xsf.ftype, true);
-                                /*if (!dont_extract[ints[j]])
-                                {
-                                    byte[] crcram = new byte[rsize + HeaderSize(xsf.ftype)];
-                                    Array.Copy(hsect, 0, crcram, 0, HeaderSize(xsf.ftype));
-                                    Array.Copy(xsf.ram, lib_load_addr, crcram, HeaderSize(xsf.ftype), rsize);
-                                    crcs[ints[j]] = BitConverter.ToUInt32(Crc32.Hash(crcram));
-                                }*/
                                 byte[] tags = encout.GetBytes("[TAG]");
                                 if (j < 1 || j > primary_lib)
                                 {
@@ -1510,16 +1434,16 @@ namespace SSFExt
                                 });
                                 dont_extract[ints[j]] = true;
                             }
-                            outfiles ??= [];
-                            if (done_out_files <= outfiles.Length)
+
+                            if (done_out_files < outfiles.Length)
                             {
                                 SaveMiniXsf(xsf, outfiles[done_out_files..]);
                             }
                             else
                             {
-                                SaveMiniXsf(xsf, outfiles);
+                                SaveMiniXsf(xsf, outfiles, overwrite: overwrite);
                             }
-                            done_out_files += xsf.minixsfs.Count;
+                            done_out_files += (type == BinaryType.MINIXSF) ? xsf.minixsfs.Count : 1;
                         }
                     }
                     catch (Exception ex)
@@ -1528,6 +1452,150 @@ namespace SSFExt
                     }
                 }
             }
+            for (int i = 0; i < filecount; i++)
+            {
+                if (!dont_extract[i])
+                {
+                    try
+                    {
+                        vbr.BaseStream.Seek(12 + (i * 84), SeekOrigin.Begin);
+                        string fname = enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0');
+                        int bsize = vbr.ReadInt32();
+                        int saddr = vbr.ReadInt32();
+                        int ssize = vbr.ReadInt32();
+                        int baddr = vbr.ReadInt32();
+                        uint ftype = vbr.ReadUInt32();
+                        vbr.BaseStream.Seek(baddr, SeekOrigin.Begin);
+                        byte[] data = new byte[bsize];
+                        vbr.Read(data, 0, bsize);
+                        if (done_out_files < outfiles.Length)
+                        {
+                            File.WriteAllBytes(outfiles[done_out_files], data);
+                            done_out_files++;
+                        }
+                        else
+                        {
+                            File.WriteAllBytes(fname + ftype switch
+                            {
+                                0xFFFFFF01 => ".hit",
+                                0xFFFFFF02 => ".pxm",
+                                0xFFFFFF03 => ".psq",
+                                0xFFFFFF04 => ".psp",
+                                0xFFFFFF05 => ".vag",
+                                0xFFFFFF08 => ".tim",
+                                0xFFFFFF0F => ".vab",
+                                0xFFFFFF13 => ".exe",
+                                0xFFFFFF14 => ".psx",
+                                0xFFFFFF16 => ".cnf",
+                                0xFFFFFF18 => ".ssflibs",
+                                0xFFFFFF19 => ".dsflibs",
+                                0xFFFFFF1A => ".bin",
+                                0xFFFFFF1B => ".mod",
+                                0xFFFFFF1C => ".vgm",
+                                0xFFFFFF1D => ".mdx",
+                                >= 0x01020000 and < 0x01030000 => ".seq",
+                                _ => ""
+                            }, data);
+                        }
+                        dont_extract[i] = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine("Error extracting file {0}: {1}", i, ex.Message);
+                    }
+                }
+            }
+        }
+
+        static Encoding? GetEncoding(string encoding, Encoding? default_enc = null)
+        {
+            if (encoding.Contains('7'))
+            {
+                return Encoding.ASCII;
+            }
+            else if (encoding.Contains('8'))
+            {
+                return Encoding.UTF8;
+            }
+            else if (encoding.Contains('9'))
+            {
+                return Encoding.Latin1;
+            }
+            else if (encoding.Contains('6'))
+            {
+                return Encoding.GetEncoding(932); //shift_jis
+            }
+            return default_enc;
+        }
+
+        static Encoding? GetEncodingOut(string encoding, Encoding? default_enc = null)
+        {
+            if (encoding.Contains('&'))
+            {
+                return Encoding.ASCII;
+            }
+            else if (encoding.Contains('*'))
+            {
+                return Encoding.UTF8;
+            }
+            else if (encoding.Contains('('))
+            {
+                return Encoding.Latin1;
+            }
+            else if (encoding.Contains('^'))
+            {
+                return Encoding.GetEncoding(932); //shift_jis
+            }
+            return default_enc;
+        }
+
+        static XsfType? GetXsfIn(string type)
+        {
+            if (type.Contains('S'))
+            {
+                return XsfType.SSF;
+            }
+            else if (type.Contains('D'))
+            {
+                return XsfType.DSF;
+            }
+            return null;
+        }
+
+        static BinaryType? GetBinaryIn(string type)
+        {
+            if (type.Contains('M'))
+            {
+                return BinaryType.MINIXSF;
+            }
+            else if (type.Contains('X'))
+            {
+                return BinaryType.XSF;
+            }
+            else if (type.Contains('B'))
+            {
+                return BinaryType.BIN;
+            }
+            return null;
+        }
+
+        static BinaryType? GetBinaryOut(string type)
+        {
+            if (type.Contains('m'))
+            {
+                return BinaryType.MINIXSF;
+            }
+            else if (type.Contains('x'))
+            {
+                return BinaryType.XSF;
+            }
+            else if (type.Contains('b'))
+            {
+                return BinaryType.BIN;
+            }
+            return null;
         }
     }
+
+
 }
