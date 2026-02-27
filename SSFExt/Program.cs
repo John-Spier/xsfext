@@ -1,21 +1,24 @@
-﻿using System.Text;
-using UtfUnknown;
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.IO.Hashing;
+using System.Reflection;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using UtfUnknown;
 
 
 namespace SSFExt
 {
     [JsonSourceGenerationOptions(
     WriteIndented = true,
-    IncludeFields = true
-    //DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    IncludeFields = true,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     )]
     [JsonSerializable(typeof(XsfFile))]
     [JsonSerializable(typeof(XsfTable))]
     [JsonSerializable(typeof(VFSFile2))]
+    [JsonSerializable(typeof(VFSFile2[]))]
     [JsonSerializable(typeof(VFSBinary2))]
     [JsonSerializable(typeof(List<XsfFile>))]
     [JsonSerializable(typeof(List<VFSFile2>))]
@@ -98,8 +101,11 @@ namespace SSFExt
                     BinaryType? binaryout;
                     XsfTable conv;
                     int a = 0;
-                    string pattern = "*.*";
+                    //string pattern = "*.*";
                     bool naomi = true;
+                    bool verbose = false;
+                    StreamWriter? con = null;
+                    JsonSerializationContext context = new();
                     //bool autoname = false;
                     switch (args[0].ToLowerInvariant())
                     {
@@ -176,7 +182,132 @@ namespace SSFExt
                             {
                                 a = 2;
                             }
-                            
+                            else
+                            {
+                                break;
+                            }
+                            if (!options.Contains('J') && !options.Contains('F'))
+                            {
+                                if (File.GetAttributes(args[a - 1]).HasFlag(FileAttributes.Directory))
+                                {
+                                    options += 'F';
+                                }
+                                else
+                                {
+                                    options += 'J';
+                                }
+                            }
+                            if (!options.Contains('j') && !options.Contains('f'))
+                            {
+                                options += Path.GetExtension(args[a]).ToLowerInvariant() switch
+                                {
+                                    ".json" => "j",
+                                    _ => "f",
+                                };
+                            }
+                            encoding = GetEncoding(options);
+                            encout = GetEncodingOut(options);
+                            type = GetXsfIn(options);
+                            binaryin = GetBinaryIn(options);
+                            //binaryout = GetBinaryOut(options);
+                            naomi = !options.Contains('N');
+                            verbose = options.Contains('V');
+                            bool direct = !options.Contains('Z');
+
+                            if (options.Contains('v'))
+                            {
+                                if (args.Length > a + 1)
+                                {
+                                    con = new StreamWriter(args.Last(), true);
+                                }
+                                else
+                                {
+                                    con = new StreamWriter(Path.GetFileNameWithoutExtension(args[a]) + ".log", true);
+                                }
+                            }
+                            if (options.Contains('J'))
+                            {
+                                var deserialized = JsonSerializer.Deserialize(File.ReadAllText(args[a - 1]), JsonSerializationContext.Default.ListVFSFile2);
+                                files = deserialized != null ? [.. deserialized] : [];
+                            }
+                            else if (options.Contains('F'))
+                            {
+                                files = GetVFSFiles(args[a - 1], TypeExtension(binaryin, type, true), encoding, verbose, con, add_direct_files: direct);
+                            }
+                            if (options.Contains('j'))
+                            {
+                                File.WriteAllText(args[a], JsonSerializer.Serialize([.. files], JsonSerializationContext.Default.ListVFSFile2));
+                            }
+                            else if (options.Contains('f'))
+                            {
+                                SaveVFSFile(args[a], files, encout, naomi);
+                            }
+                            return;
+                        case "-e": //EXTRACT FROM VFS
+                            if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                a = 3;
+                                options = args[1][2..];
+                            }
+                            else if (args.Length > 2)
+                            {
+                                a = 2;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                            binaryout = GetBinaryOut(options) ?? BinaryType.ANY;
+                            encoding = GetEncoding(options);
+                            encout = GetEncodingOut(options);
+                            bool extract_all = !options.Contains('z');
+                            bool always_overwrite = !options.Contains('o');
+                            ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite);
+                            return;
+                        case "-c": //CREATE MINIXSF
+                            if (args.Length > 4 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                a = 4;
+                                options = args[1][2..];
+
+                            }
+                            else if (args.Length > 3)
+                            {
+                                a = 3;
+                            }
+                            else if (args.Length > 2)
+                            {
+                                a = 3;
+                                Array.Resize(ref args, 4);
+                                args[3] = args[1];
+                            }
+                            bool padend = options.Contains('O');
+                            naomi = !options.Contains('N');
+                            verbose = options.Contains('V');
+                            bool overwrite = !options.Contains('o');
+                            if (options.Contains('v'))
+                            {
+                                if (args.Length > a + 1)
+                                {
+                                    con = new StreamWriter(args.Last(), true);
+                                }
+                                else
+                                {
+                                    con = new StreamWriter(Path.GetFileNameWithoutExtension(args[a]) + ".log", true);
+                                }
+                            }
+                            encoding = GetEncoding(options);
+                            encout = GetEncodingOut(options);
+                            type = GetXsfIn(options);
+                            binaryin = GetBinaryIn(options);
+                            binaryout = GetBinaryOut(options);
+                            conv = LoadFile(Path.GetFullPath(args[a - 2]), binaryin, type, encoding, naomi: naomi);
+                            XsfTable libconv = LoadFile(Path.GetFullPath(args[a - 1]), binaryin, type, encoding, naomi: naomi);
+                            XsfFile minxsf = CreateMiniXSF(libconv, conv, verbose, con, null, encout, 0, padend ? 0 : 1);
+                            minxsf.tags = RemoveLibTags(minxsf.tags, encoding, [$"_lib={Path.GetFileName(args[a - 1])}"], outenc: encout);
+                            conv.minixsfs.Add(minxsf);
+                            conv.btype = BinaryType.MINIXSF;
+                            SaveMiniXsf(conv, [args[a]], enc: encout, overwrite: overwrite);
                             return;
                     }
                 }
@@ -1383,6 +1514,11 @@ namespace SSFExt
                                     : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".dsflib",
                                     _ => strings[j]
                                 };
+                                if (done_out_files < outfiles.Length)
+                                {
+                                    strings[j] = outfiles[done_out_files];
+                                    done_out_files++;
+                                }
                             }
                             xsf.ram = new byte[highest - lowest + HeaderSize(xsf.ftype)];
                             
@@ -1434,16 +1570,8 @@ namespace SSFExt
                                 });
                                 dont_extract[ints[j]] = true;
                             }
-
-                            if (done_out_files < outfiles.Length)
-                            {
-                                SaveMiniXsf(xsf, outfiles[done_out_files..]);
-                            }
-                            else
-                            {
-                                SaveMiniXsf(xsf, outfiles, overwrite: overwrite);
-                            }
-                            done_out_files += (type == BinaryType.MINIXSF) ? xsf.minixsfs.Count : 1;
+                            SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                            //done_out_files += (type == BinaryType.MINIXSF) ? xsf.minixsfs.Count : 1;
                         }
                     }
                     catch (Exception ex)
@@ -1594,6 +1722,26 @@ namespace SSFExt
                 return BinaryType.BIN;
             }
             return null;
+        }
+
+        static string TypeExtension(BinaryType? binaryType, XsfType? xsfType, bool pattern = false)
+        {
+            binaryType ??= BinaryType.ANY;
+            xsfType ??= XsfType.ANY;
+            string type = xsfType switch
+            {
+                XsfType.SSF => "ssf",
+                XsfType.DSF => "dsf",
+                _ => pattern ? "*sf" : "xsf"
+            };
+
+            return binaryType switch
+            {
+                BinaryType.BIN => pattern ? "*." + type + "bin" : "." + type + "bin",
+                BinaryType.XSF => pattern ? "*." + type : "." + type,
+                BinaryType.MINIXSF => pattern ? "*.mini" + type : ".mini" + type,
+                _ => pattern ? "*." + type : "." + type
+            };
         }
     }
 

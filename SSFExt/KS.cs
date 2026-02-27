@@ -2,7 +2,7 @@
 {
     internal class KS
     {
-        static byte[][] KS_tonext(byte[] ram)
+        public static byte[][] TonExt(byte[] ram)
         {
             ArgumentNullException.ThrowIfNull(ram);
             int fisz = ram.Length;
@@ -180,7 +180,7 @@
             return [.. extracted];
         }
 
-        static byte[][] KS_seqext(byte[] ram)
+        public static byte[][] SeqExt(byte[] ram)
         {
             ArgumentNullException.ThrowIfNull(ram);
             int fisz = ram.Length;
