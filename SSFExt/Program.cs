@@ -1,11 +1,14 @@
 ﻿using System.IO.Compression;
 using System.IO.Hashing;
-using System.Reflection;
+//using System.Reflection;
+using System.Runtime.Intrinsics.Arm;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Windows.Markup;
 using UtfUnknown;
+using Crc32 = System.IO.Hashing.Crc32;
 
 
 namespace SSFExt
@@ -244,14 +247,14 @@ namespace SSFExt
                             }
                             return;
                         case "-e": //EXTRACT FROM VFS
-                            if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
-                            {
-                                a = 3;
-                                options = args[1][2..];
-                            }
-                            else if (args.Length > 2)
+                            if (args.Length > 2 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
                             {
                                 a = 2;
+                                options = args[1][2..];
+                            }
+                            else if (args.Length > 1)
+                            {
+                                a = 1;
                             }
                             else
                             {
@@ -260,8 +263,8 @@ namespace SSFExt
                             binaryout = GetBinaryOut(options) ?? BinaryType.ANY;
                             encoding = GetEncoding(options);
                             encout = GetEncodingOut(options);
-                            bool extract_all = !options.Contains('z');
-                            bool always_overwrite = !options.Contains('o');
+                            bool extract_all = options.Contains('z');
+                            bool always_overwrite = options.Contains('o');
                             ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite);
                             return;
                         case "-c": //CREATE MINIXSF
@@ -308,7 +311,80 @@ namespace SSFExt
                             conv.minixsfs.Add(minxsf);
                             conv.btype = BinaryType.MINIXSF;
                             SaveMiniXsf(conv, [args[a]], enc: encout, overwrite: overwrite);
+
                             return;
+                        case "-s":
+                            if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                a = 3;
+                                options = args[1][2..]; //: is never used
+                            }
+                            else if (args.Length > 2)
+                            {
+                                a = 2;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                            encoding = GetEncoding(options);
+                            encout = GetEncodingOut(options);
+                            binaryin = GetBinaryIn(options);
+                            type = GetXsfIn(options);
+                            bool endpad = options.Contains('O');
+                            verbose = options.Contains('V');
+                            bool zlib = options.Contains('L');
+                            if (options.Contains('v'))
+                            {
+                                if (args.Length > a + 1)
+                                {
+                                    con = new StreamWriter(args.Last(), true);
+                                }
+                                else
+                                {
+                                    con = new StreamWriter(Path.GetFileNameWithoutExtension(args[a]) + ".log", true);
+                                }
+                            }
+                            string? zl = null;
+                            if (zlib && args.Length > a + 1)
+                            {
+                                zl = args[a + 1];
+                            }
+                            GetMiniXSFsFromDir(args[a - 1], args[a], zl, verbose, con, endpad, TypeExtension(binaryin, type, true), encoding, encout);
+                            return;
+                        case "-h":
+                            string appname = Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
+                            if (args.Length > 1)
+                            {
+                                switch (args[1])
+                                {
+                                    case "-f":
+                                        Console.WriteLine("XSF format converter/tagger");
+                                        Console.WriteLine($"Usage: {appname} -f [-o:options] minipsf/psf/exe outminipsf/outpsf/outexe [tag=value] [tag2=value2]...");
+                                        Console.WriteLine("-o Options:");
+                                        Array.ForEach(GetOptions("NSDMXBmxb!@#6789^&*("), Console.WriteLine);
+                                        return;
+                                    case "-v":
+                                        Console.WriteLine("XSF set to VFS");
+                                        Console.WriteLine($"Usage: {appname} -v [-o:options] dir/json outvfs/out/json/outdir");
+                                        Console.WriteLine("-o Options:");
+                                        Array.ForEach(GetOptions("NSDmxbz6789^&*("), Console.WriteLine);
+                                        return;
+                                    case "-e":
+                                        Console.WriteLine("Extract files from VFS");
+                                        Console.WriteLine($"Usage: {appname} -e [-o:options] vfsfile [outfile1] [outfile2]...");
+                                        Console.WriteLine("-o Options:");
+                                        Array.ForEach(GetOptions("NSDMXBFJfjvVZ6789^&*("), Console.WriteLine);
+                                        return;
+                                    case "-c":
+                                        Console.WriteLine("MiniXSF creator/rebaser");
+                                        Console.WriteLine($"Usage: {appname} -x [-o:options] xsf xsflib [outminixsf]...");
+                                        Console.WriteLine("-o Options:");
+                                        return;
+                                }
+                            }
+                            break;
+
                     }
                 }
             }
@@ -316,7 +392,14 @@ namespace SSFExt
             {
                 Console.WriteLine(e.ToString());
             }
-
+            string helpname = Path.GetFileNameWithoutExtension(AppDomain.CurrentDomain.FriendlyName);
+            Console.WriteLine($"{helpname} Command Line Options:");
+            Console.WriteLine("-f: Convert XSF format/add tags");
+            Console.WriteLine("-v: Create VFS/JSON from XSF set");
+            Console.WriteLine("-e: Extract files from VFS");
+            Console.WriteLine("-c: Create/rebase MiniXSF from new XSFLib");
+            Console.WriteLine("-s: Create/rebase MiniXSF set from new XSFLib");
+            Console.WriteLine($"-h: Show a help message when followed by any other option (example: {helpname} -h -f)");
         }
 
         static XsfFile CreateMiniXSF(XsfTable lib, XsfTable psf, bool verbose = false, StreamWriter? con = null, byte[]? zerolib = null,
@@ -1089,12 +1172,13 @@ namespace SSFExt
                         Console.Error.WriteLine("Error preparing xSF file for saving: " + ex.Message);
                         return 0;
                     }
-                    //break;
+                //break;
+                case BinaryType.ANY:
                 case BinaryType.MINIXSF:
                     int i = 0;
                     foreach (XsfFile xf in xsfTable.minixsfs.Where(x => x.modified))
                     {
-                        if ((overwrite || File.Exists(string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i])) && 
+                        if ((overwrite || !File.Exists(string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i])) && 
                             SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i]))
                         {
                             i++;
@@ -1449,10 +1533,13 @@ namespace SSFExt
             }
             int filecount = vbr.ReadInt32();
             bool[] dont_extract = new bool[filecount];
+            int[] ostrings = new int[filecount];
+            Array.Fill(ostrings, -1);
             //uint[] crcs = new uint[filecount];
             //int base_addr = vbr.ReadInt32() * 2048;
             vbr.ReadInt32(); //base addr, not needed since libs have absolute addresses
             int done_out_files = 0;
+            
             if (!extract_all)
             {
                 for (int i = 0; i < filecount; i++)
@@ -1514,9 +1601,14 @@ namespace SSFExt
                                     : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".dsflib",
                                     _ => strings[j]
                                 };
-                                if (done_out_files < outfiles.Length)
+                                if (ostrings[ints[j]] > -1)
+                                {
+                                    strings[j] = outfiles[ostrings[ints[j]]];
+                                }
+                                else if (done_out_files < outfiles.Length)
                                 {
                                     strings[j] = outfiles[done_out_files];
+                                    ostrings[ints[j]] = done_out_files;
                                     done_out_files++;
                                 }
                             }
@@ -1742,6 +1834,56 @@ namespace SSFExt
                 BinaryType.MINIXSF => pattern ? "*.mini" + type : ".mini" + type,
                 _ => pattern ? "*." + type : "." + type
             };
+        }
+
+        static string[] GetOptions(string arg)
+        {
+            List<string> ret = [];
+            foreach (char c in arg)
+            {
+                var desc = c switch
+                {
+                    'F' => "F - Input Directory",
+                    'J' => "J - Input JSON",
+                    'f' => "f - Output VFS",
+                    'j' => "j - Output JSON",
+                    '6' => "6 - Set encoding in to Shift-JIS",
+                    '7' => "7 - Set encoding in to ASCII",
+                    '8' => "8 - Set encoding in to UTF-8",
+                    '9' => "9 - Set encoding in to Latin-1",
+                    '^' => "^ - Set encoding out to Shift-JIS",
+                    '&' => "& - Set encoding out to ASCII",
+                    '*' => "* - Set encoding out to UTF-8",
+                    '(' => "( - Set encoding out to Latin-1",
+                    'S' => "S - Input SSF",
+                    'D' => "D - Input DSF",
+                    //'s' => "s - Output SSF",
+                    //'d' => "d - Output DSF",
+                    'M' => "M - Input MINIxSF",
+                    'X' => "X - Input xSF",
+                    'B' => "B - Input xSF Binary",
+                    'm' => "m - Output MINIxSF",
+                    'x' => "x - Output xSF",
+                    'b' => "b - Output xSF Binary",
+                    '#' => "# - Clear tags and replace with last arguments",
+                    '!' => "! - Add last arguments to tags, replacing existing tags",
+                    '@' => "@ - Append last arguments to tags",
+                    'N' => "N - Only allow 2MB RAM for DSFs",
+                    'v' => "v - Log output, file selected automatically",
+                    'V' => "V - Verbose output",
+                    'Z' => "Z - Don't load non-XSF files into VAB",
+                    'z' => "z - Extract files directly from VFS",
+                    'o' => "o - Always overwrite files when extracting from VFS",
+                    'O' => "O - Align MiniXSF size",
+                    'L' => "L - Zero out all areas of XSFLIB not covered by all MINIXSFS",
+                    _ => null
+                };
+                if (desc != null)
+                {
+                    ret.Add(desc);
+                }
+            }
+            return [.. ret];
         }
     }
 
