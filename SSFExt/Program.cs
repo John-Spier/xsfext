@@ -408,6 +408,10 @@ namespace SSFExt
             con ??= new(Console.OpenStandardOutput());
             con.AutoFlush = true;
             int lib_base, psf_base;
+            if (lib.ftype != psf.ftype)
+            {
+                throw new ArgumentException("Can't create libraries from different types");
+            }
             int h = HeaderSize(lib.ftype), k = HeaderSize(psf.ftype);
             int change_start = int.MaxValue, change_end = int.MinValue, bytediff = 0;
             uint lib_start = GetBinOffset(lib.ram, lib.ftype, false);//BitConverter.ToUInt32(lib.ram, 24);// % 0x20000000;
@@ -589,18 +593,25 @@ namespace SSFExt
                 {
                     con.WriteLine($"Loading {f}...");
                 }
-                XsfTable p = LoadFile(f, enc: enc);
-                p.btype = BinaryType.MINIXSF;
-                XsfFile psf = CreateMiniXSF(lib, p, verbose, con, bytes, outenc, 0, endpad);
-                psf.tags = RemoveLibTags(psf.tags, enc, [$"_lib={zerolib}"], outenc: outenc);
-                File.Move(f, Path.Join(path, Path.GetFileNameWithoutExtension(f) + ".BAK"));
-                p.minixsfs.Add(psf);
-                files.Add(psf);
-                SaveMiniXsf(p, [Path.Join(path, Path.GetFileNameWithoutExtension(f) + p.ftype switch {
-                    XsfType.SSF => ".minissf",
-                    XsfType.DSF => ".minidsf",
-                    _ => ".minixsf"
-                })], enc: outenc);
+                try
+                {
+                    XsfTable p = LoadFile(f, enc: enc);
+                    p.btype = BinaryType.MINIXSF;
+                    XsfFile psf = CreateMiniXSF(lib, p, verbose, con, bytes, outenc, 0, endpad);
+                    psf.tags = RemoveLibTags(psf.tags, enc, [$"_lib={zerolib}"], outenc: outenc);
+                    File.Move(f, Path.Join(path, Path.GetFileNameWithoutExtension(f) + ".BAK"));
+                    p.minixsfs.Add(psf);
+                    files.Add(psf);
+                    SaveMiniXsf(p, [Path.Join(path, Path.GetFileNameWithoutExtension(f) + p.ftype switch {
+                        XsfType.SSF => ".minissf",
+                        XsfType.DSF => ".minidsf",
+                        _ => ".minixsf"
+                        })], enc: outenc);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"File {f} exception: {ex.Message}");
+                }
             }
             if (bytes.Length > 0)
             {
@@ -1629,7 +1640,7 @@ namespace SSFExt
                                 vbr.Read(xsf.ram, (int)lib_load_addr, rsize);
                                 byte[] hsect = GetHeaderSect(hsaddr, xsf.ftype, true);
                                 byte[] tags = encout.GetBytes("[TAG]");
-                                if (j < 1 || j > primary_lib)
+                                if ((j < 1 && j != primary_lib) || j > primary_lib)
                                 {
                                     //tags = encout.GetBytes("[TAG]");
                                 }
@@ -1640,7 +1651,10 @@ namespace SSFExt
                                 else if (j == primary_lib)
                                 {
                                     List<string> liblines = [];
-                                    liblines.Add($"_lib={strings[j - 1]}");
+                                    if (j > 0)
+                                    {
+                                        liblines.Add($"_lib={strings[j - 1]}");
+                                    }
                                     for (int k = j + 1; k < ints.Length; k++)
                                     {
                                         liblines.Add($"_lib{k - j + 1}={strings[k]}");
@@ -1713,6 +1727,8 @@ namespace SSFExt
                                 0xFFFFFF1B => ".mod",
                                 0xFFFFFF1C => ".vgm",
                                 0xFFFFFF1D => ".mdx",
+                                0xFFFFFFFF or 0xFFFFFFF3 or 0xFFFFFFF5 or 0xFFFFFFF6 => ".txt",
+                                0xFFFFFFFE or 0xFFFFFFFD or 0xFFFFFFFC => ".vfs",
                                 >= 0x01020000 and < 0x01030000 => ".seq",
                                 _ => ""
                             }, data);
