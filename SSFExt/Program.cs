@@ -1,12 +1,8 @@
 ﻿using System.IO.Compression;
-using System.IO.Hashing;
-//using System.Reflection;
-using System.Runtime.Intrinsics.Arm;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Windows.Markup;
 using UtfUnknown;
 using Crc32 = System.IO.Hashing.Crc32;
 
