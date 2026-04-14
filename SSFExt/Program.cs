@@ -261,7 +261,8 @@ namespace SSFExt
                             encout = GetEncodingOut(options);
                             bool extract_all = options.Contains('z');
                             bool always_overwrite = options.Contains('o');
-                            ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite);
+                            bool dont_merge = !options.Contains('n');
+                            ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite, dont_merge);
                             return;
                         case "-c": //CREATE MINIXSF
                             if (args.Length > 4 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
@@ -309,7 +310,7 @@ namespace SSFExt
                             SaveMiniXsf(conv, [args[a]], enc: encout, overwrite: overwrite);
 
                             return;
-                        case "-s":
+                        case "-s": //CREATE MINIXSF SET FROM DIR
                             if (args.Length > 3 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
                             {
                                 a = 3;
@@ -370,12 +371,19 @@ namespace SSFExt
                                         Console.WriteLine("Extract files from VFS");
                                         Console.WriteLine($"Usage: {appname} -e [-o:options] vfsfile [outfile1] [outfile2]...");
                                         Console.WriteLine("-o Options:");
-                                        Array.ForEach(GetOptions("NSDMXBFJfjvVZ6789^&*("), Console.WriteLine);
+                                        Array.ForEach(GetOptions("nNoSDMXBFJfjvVZ6789^&*("), Console.WriteLine);
                                         return;
                                     case "-c":
                                         Console.WriteLine("MiniXSF creator/rebaser");
                                         Console.WriteLine($"Usage: {appname} -x [-o:options] xsf xsflib [outminixsf]...");
                                         Console.WriteLine("-o Options:");
+                                        Array.ForEach(GetOptions("NOoVvSDMXBmxb6789^&*("), Console.WriteLine);
+                                        return;
+                                    case "-s":
+                                        Console.WriteLine("MiniXSF set creator/rebaser from directory of XSFs");
+                                        Console.WriteLine($"Usage: {appname} -s [-o:options] dir xsflib [zerolib]");
+                                        Console.WriteLine("-o Options:");
+                                        Array.ForEach(GetOptions("LOvVSDMXBz6789^&*("), Console.WriteLine);
                                         return;
                                 }
                             }
@@ -1117,9 +1125,9 @@ namespace SSFExt
                     {
                         fn[0] = xsfTable.ftype switch
                         {
-                            XsfType.SSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".ssfbin",
-                            XsfType.DSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".dsfbin",
-                            _ => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".bin",
+                            XsfType.SSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".ssfbin",
+                            XsfType.DSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".dsfbin",
+                            _ => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".bin",
                         };
                     }
                     try
@@ -1140,7 +1148,7 @@ namespace SSFExt
                 case BinaryType.XSF:
                     if (string.IsNullOrEmpty(fn[0]))
                     {
-                        fn[0] = Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Where(x => !x.is_library).Last().filename) + ".ssf";
+                        fn[0] = Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + TypeExtension(BinaryType.XSF, xsfTable.ftype);
                     }
                     try
                     {
@@ -1527,11 +1535,15 @@ namespace SSFExt
 
         static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.XSF, 
             string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
-            bool extract_all = false, bool overwrite = false) //, bool smallest_lib = true) // string? outdir = null)
+            bool extract_all = false, bool overwrite = false, bool save_seperate = true) //, bool smallest_lib = true) // string? outdir = null)
         {
             enc ??= Encoding.ASCII;
             encout ??= Encoding.UTF8;
             outfiles ??= [];
+            if (type != BinaryType.MINIXSF)
+            {
+                save_seperate = false;
+            }
             BinaryReader vbr = new(new FileStream(filename, FileMode.Open));
             if (vbr.ReadUInt32() != 0x00534656)
             {
@@ -1619,12 +1631,12 @@ namespace SSFExt
                                     done_out_files++;
                                 }
                             }
-                            xsf.ram = new byte[highest - lowest + HeaderSize(xsf.ftype)];
-                            
+                            if (!save_seperate)
+                            {
+                                xsf.ram = new byte[highest - lowest + HeaderSize(xsf.ftype)];
+                            }
                             for (int j = 0; j < ints.Length; j++)
                             {
-                                vbr.BaseStream.Seek(12 + (ints[j] * 84), SeekOrigin.Begin);
-                                //string libname = enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0');
                                 vbr.BaseStream.Seek(12 + (ints[j] * 84) + 76, SeekOrigin.Begin);
                                 int seekaddr = vbr.ReadInt32();
                                 uint hsaddr = vbr.ReadUInt32();
@@ -1632,7 +1644,12 @@ namespace SSFExt
                                 vbr.BaseStream.Seek(12 + (ints[j] * 84) + 64, SeekOrigin.Begin);
                                 int rsize = vbr.ReadInt32();
                                 vbr.BaseStream.Seek(seekaddr, SeekOrigin.Begin);
-
+                                if (save_seperate || xsf.ram == null)
+                                {
+                                    xsf.ram = new byte[rsize + HeaderSize(xsf.ftype)];
+                                    lib_load_addr = (uint)HeaderSize(xsf.ftype);
+                                    xsf.minixsfs = [];
+                                }
                                 vbr.Read(xsf.ram, (int)lib_load_addr, rsize);
                                 byte[] hsect = GetHeaderSect(hsaddr, xsf.ftype, true);
                                 byte[] tags = encout.GetBytes("[TAG]");
@@ -1657,7 +1674,6 @@ namespace SSFExt
                                     }
                                     tags = encout.GetBytes("[TAG]" + string.Join("\n", liblines));
                                 }
-                                //xsf.minixsfs ??= [];
                                 xsf.minixsfs.Add(new()
                                 {
                                     filename = strings[j],
@@ -1671,8 +1687,18 @@ namespace SSFExt
                                     tags = tags
                                 });
                                 dont_extract[ints[j]] = true;
+                                if (save_seperate)
+                                {
+                                    Array.Copy(hsect, 0, xsf.ram, 0, hsect.Length);
+                                    SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                                }
                             }
-                            SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                            if (!save_seperate)
+                            {
+                                xsf.ram ??= new byte[HeaderSize(xsf.ftype)];
+                                Array.Copy(GetHeaderSect(lowest, xsf.ftype, true), 0, xsf.ram, 0, HeaderSize(xsf.ftype));
+                                SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                            }
                             //done_out_files += (type == BinaryType.MINIXSF) ? xsf.minixsfs.Count : 1;
                         }
                     }
@@ -1881,9 +1907,10 @@ namespace SSFExt
                     '!' => "! - Add last arguments to tags, replacing existing tags",
                     '@' => "@ - Append last arguments to tags",
                     'N' => "N - Only allow 2MB RAM for DSFs",
+                    'n' => "n - Merge files when extracting from VFS",
                     'v' => "v - Log output, file selected automatically",
                     'V' => "V - Verbose output",
-                    'Z' => "Z - Don't load non-XSF files into VAB",
+                    'Z' => "Z - Don't load non-XSF files into VFS",
                     'z' => "z - Extract files directly from VFS",
                     'o' => "o - Always overwrite files when extracting from VFS",
                     'O' => "O - Align MiniXSF size",
