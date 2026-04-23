@@ -363,15 +363,15 @@ namespace SSFExt
                                         return;
                                     case "-v":
                                         Console.WriteLine("XSF set to VFS");
-                                        Console.WriteLine($"Usage: {appname} -v [-o:options] dir/json outvfs/out/json/outdir");
+                                        Console.WriteLine($"Usage: {appname} -v [-o:options] dir/json outvfs/outjson");
                                         Console.WriteLine("-o Options:");
-                                        Array.ForEach(GetOptions("NSDmxbz6789^&*("), Console.WriteLine);
+                                        Array.ForEach(GetOptions("NSDMXBFJfjZ6789^&*("), Console.WriteLine);
                                         return;
                                     case "-e":
                                         Console.WriteLine("Extract files from VFS");
                                         Console.WriteLine($"Usage: {appname} -e [-o:options] vfsfile [outfile1] [outfile2]...");
                                         Console.WriteLine("-o Options:");
-                                        Array.ForEach(GetOptions("nNoSDMXBFJfjvVZ6789^&*("), Console.WriteLine);
+                                        Array.ForEach(GetOptions("nNoSDmxbvVZ6789^&*("), Console.WriteLine);
                                         return;
                                     case "-c":
                                         Console.WriteLine("MiniXSF creator/rebaser");
@@ -1533,7 +1533,7 @@ namespace SSFExt
             };
         }
 
-        static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.XSF, 
+        static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.MINIXSF, 
             string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
             bool extract_all = false, bool overwrite = false, bool save_seperate = true) //, bool smallest_lib = true) // string? outdir = null)
         {
