@@ -163,6 +163,17 @@ namespace SSFExt
                                     conv.minixsfs[idx] = temp;
                                 }
                             }
+                            else if (encout != null)
+                            {
+                                int idx = conv.minixsfs.FindLastIndex(x => !x.is_library);
+                                if (idx != -1)
+                                {
+                                    var temp = conv.minixsfs[idx];
+                                    temp.modified = true;
+                                    temp.tags = RemoveLibTags(conv.minixsfs.LastOrDefault(x => !x.is_library).tags, encoding, [], true, true, encout);
+                                    conv.minixsfs[idx] = temp;
+                                }
+                            }
                             if (binaryout.HasValue)
                             {
                                 conv.btype = binaryout.Value;
@@ -943,13 +954,13 @@ namespace SSFExt
                 binary.BaseStream.Seek(16 + psize + rsize, SeekOrigin.Begin);
                 try
                 {
-                    enc ??= CharsetDetector.DetectFromStream(binary.BaseStream).Detected.Encoding;
+                    enc = DetectTagEncoding(null, binary.BaseStream, enc);
                 }
                 catch
                 {
-                    enc ??= Encoding.UTF8;
+                    enc ??= Encoding.GetEncoding(932);
                 }
-                info.tag_encoding = enc.WebName;
+                info.tag_encoding = enc?.WebName ?? Encoding.GetEncoding(932).WebName;
                 binary.BaseStream.Seek(16 + psize + rsize, SeekOrigin.Begin);
                 info.tags = binary.ReadBytes((int)binary.BaseStream.Length - (int)binary.BaseStream.Position);
                 switch (xtab.ftype)
@@ -1019,11 +1030,12 @@ namespace SSFExt
                 {
                     try
                     {
-                        enc ??= CharsetDetector.DetectFromStream(br.BaseStream).Detected.Encoding;
+                        br.BaseStream.Seek(tagpos, SeekOrigin.Begin);
+                        enc = DetectTagEncoding(null, br.BaseStream, enc);
                     }
                     catch
                     {
-                        enc ??= Encoding.UTF8;
+                        enc ??= Encoding.GetEncoding(932);
                     }
                     br.BaseStream.Seek(tagpos + 5, SeekOrigin.Begin);
                     StreamReader sr = new(br.BaseStream, enc);
@@ -1255,13 +1267,13 @@ namespace SSFExt
         {
             try
             {
-                enc ??= CharsetDetector.DetectFromBytes(data).Detected.Encoding;
+                enc = DetectTagEncoding(data, enc: enc) ?? Encoding.GetEncoding(932);
                 outenc ??= enc;
             }
             catch
             {
-                enc ??= Encoding.UTF8;
-                outenc ??= Encoding.UTF8;
+                enc ??= Encoding.GetEncoding(932);
+                outenc ??= enc;
             }
             if (string.IsNullOrEmpty(tagnewline)) //make default this?
             {
@@ -1269,15 +1281,24 @@ namespace SSFExt
             }
             liblines ??= [];
             List<string> rtags = [];
+            bool needs_utf8 = outenc.Equals(Encoding.UTF8);
             if (replacetags)
             {
                 rtags = [.. liblines.Select(x => x.Split('=', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() + '=')];
             }
+
             if (!keeplibs)
             {
                 rtags.Add("_lib");
             }
-
+            if (liblines.Any(x => x.StartsWith("utf8=", StringComparison.OrdinalIgnoreCase)))
+            {
+                needs_utf8 = false;
+            }
+            else
+            {
+                rtags.Add("utf8=");
+            }
             try
             {
                 StreamReader sr = new(new MemoryStream(data), enc);
@@ -1295,10 +1316,17 @@ namespace SSFExt
                         try
                         {
                             lib = sr.ReadLine() ?? string.Empty;
-
                             if (!rtags.Any(x => lib.StartsWith(x, StringComparison.OrdinalIgnoreCase)))
                             {
                                 liblines.Add(lib);
+                            }
+                            if (lib.StartsWith("utf8=1", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (needs_utf8)
+                                {
+                                    liblines.Add(lib);
+                                    needs_utf8 = false;
+                                }
                             }
                         }
                         catch (Exception tx)
@@ -1306,6 +1334,7 @@ namespace SSFExt
                             Console.Error.WriteLine("Exception: {0}", tx.Message);
                             Console.Error.WriteLine("{0} was not a valid tag line", lib);
                         }
+
                     }
                 }
                 sr.Dispose();
@@ -1315,9 +1344,9 @@ namespace SSFExt
             {
                 Console.Error.WriteLine($"Tag error: {e.Message}");
             }
+            string utf8tag = needs_utf8 ? "utf8=1" + tagnewline : "";
 
-
-            string tagtext = "[TAG]" + string.Join(tagnewline, liblines);
+            string tagtext = "[TAG]" + utf8tag + string.Join(tagnewline, liblines);
             return outenc.GetBytes(tagtext);
         }
 
@@ -1333,12 +1362,12 @@ namespace SSFExt
             }
             try
             {
-                enc ??= CharsetDetector.DetectFromBytes(psfFile.tags).Detected.Encoding;
+                enc ??= DetectTagEncoding(psfFile.tags, enc: enc);
             }
             catch
             {
                 //Console.Error.WriteLine("No encoding could be autodetected, using UTF8!");
-                enc = Encoding.UTF8;
+                enc = Encoding.GetEncoding(932);
             }
             try
             {
@@ -1537,8 +1566,8 @@ namespace SSFExt
             string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
             bool extract_all = false, bool overwrite = false, bool save_seperate = true) //, bool smallest_lib = true) // string? outdir = null)
         {
-            enc ??= Encoding.ASCII;
-            encout ??= Encoding.UTF8;
+            //enc ??= Encoding.ASCII;
+            //encout ??= enc;
             outfiles ??= [];
             if (type != BinaryType.MINIXSF)
             {
@@ -1554,9 +1583,37 @@ namespace SSFExt
             bool[] dont_extract = new bool[filecount];
             int[] ostrings = new int[filecount];
             Array.Fill(ostrings, -1);
+            if (enc == null)
+            {
+                byte[] namesect = new byte[filecount * 64];
+                int base_addr = 0;
+                for (int i = 0; i < filecount; i++)
+                {
+                    vbr.BaseStream.Seek(12 + (i * 84), SeekOrigin.Begin);
+                    vbr.Read(namesect, base_addr, 64);
+                    //namesect[(i * 64) + 63] = 10; //\n
+                    while (namesect[base_addr] != 0)
+                    {
+                        base_addr++;
+                    }
+                    namesect[base_addr] = 10; //\n
+                    base_addr++;
+                }
+                try
+                {
+                    enc = CharsetDetector.DetectFromBytes(namesect).Detected.Encoding;
+                }
+                catch
+                {
+                    enc = Encoding.ASCII;
+                }
+            }
+            encout ??= enc;
+            string utftag = encout.Equals(Encoding.UTF8) ? "utf8=1\n" : "";
+            //vbr.BaseStream.Seek(12, SeekOrigin.Begin);
             //uint[] crcs = new uint[filecount];
             //int base_addr = vbr.ReadInt32() * 2048;
-            vbr.ReadInt32(); //base addr, not needed since libs have absolute addresses
+            //vbr.ReadInt32(); //base addr, not needed since libs have absolute addresses
             int done_out_files = 0;
             
             if (!extract_all)
@@ -1614,9 +1671,9 @@ namespace SSFExt
 
                                 strings[j] = xsf.ftype switch
                                 {
-                                    XsfType.SSF => j == primary_lib ? fname + ".minissf"
+                                    XsfType.SSF => j == primary_lib ? fname + (ints.Length > 1 ? ".minissf" : ".ssf")
                                     : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".ssflib",
-                                    XsfType.DSF => j == primary_lib ? fname + ".minidsf"
+                                    XsfType.DSF => j == primary_lib ? fname + (ints.Length > 1 ? ".minidsf" : ".dsf")
                                     : Path.GetFileNameWithoutExtension(enc.GetString(vbr.ReadBytes(64)).TrimEnd('\0')) + ".dsflib",
                                     _ => strings[j]
                                 };
@@ -1652,14 +1709,14 @@ namespace SSFExt
                                 }
                                 vbr.Read(xsf.ram, (int)lib_load_addr, rsize);
                                 byte[] hsect = GetHeaderSect(hsaddr, xsf.ftype, true);
-                                byte[] tags = encout.GetBytes("[TAG]");
+                                byte[] tags = encout.GetBytes($"[TAG]"); //since theres nothing in the tags, dont add utf8 tag to avoid newline
                                 if ((j < 1 && j != primary_lib) || j > primary_lib)
                                 {
                                     //tags = encout.GetBytes("[TAG]");
                                 }
                                 else if (j < primary_lib)
                                 {
-                                    tags = encout.GetBytes($"[TAG]_lib={strings[j - 1]}");
+                                    tags = encout.GetBytes($"[TAG]{utftag}_lib={strings[j - 1]}");
                                 }
                                 else if (j == primary_lib)
                                 {
@@ -1672,7 +1729,7 @@ namespace SSFExt
                                     {
                                         liblines.Add($"_lib{k - j + 1}={strings[k]}");
                                     }
-                                    tags = encout.GetBytes("[TAG]" + string.Join("\n", liblines));
+                                    tags = encout.GetBytes("[TAG]" + utftag + string.Join("\n", liblines));
                                 }
                                 xsf.minixsfs.Add(new()
                                 {
@@ -1872,6 +1929,99 @@ namespace SSFExt
                 BinaryType.MINIXSF => pattern ? "*.mini" + type : ".mini" + type,
                 _ => pattern ? "*." + type : "." + type
             };
+        }
+
+        static Encoding? DetectTagEncoding(byte[]? tagdata = null, Stream? s = null, Encoding? enc = null, bool nullout = false)
+        {
+            BinaryReader? binary = null;
+            StreamReader? sreader;
+            long oldpos = 0;
+            //bool encnull = false;
+            //Encoding enc = Encoding.UTF8;
+            //enc ??= Encoding.UTF8;
+            if (s != null)
+            {
+                try
+                {
+                    oldpos = s.Position;
+                    enc ??= CharsetDetector.DetectFromStream(s).Detected.Encoding;
+                    binary = new(s);
+                }
+                catch
+                {
+                    //enc = Encoding.UTF8;
+                }
+            }
+            else if (tagdata != null && tagdata.Length > 5)
+            {
+                try
+                {
+                    binary = new(new MemoryStream(tagdata));
+                    s = binary.BaseStream;
+                    enc ??= CharsetDetector.DetectFromBytes(tagdata).Detected.Encoding;
+                }
+                catch
+                {
+                    //enc = Encoding.UTF8;
+                }
+            }
+            //enc ??= Encoding.UTF8;
+            try
+            {
+                s ??= new MemoryStream(tagdata ?? []);
+                s.Seek(oldpos, SeekOrigin.Begin);
+                binary ??= new(s);
+                if (enc == null)
+                {
+                    sreader = new(s);
+                }
+                else
+                {
+                    sreader = new(s, enc);
+                }
+                uint tagssig = binary.ReadUInt32();
+                if (tagssig == 0x4741545B && binary.ReadByte() == 0x5D)
+                {
+                    while (sreader.Peek() >= 0)
+                    {
+                        try
+                        {
+                            string? utf = sreader.ReadLine();
+                            if ((utf ?? string.Empty).StartsWith("utf8", StringComparison.OrdinalIgnoreCase))
+                            {
+                                string utftag = (utf ?? string.Empty).Split('=', StringSplitOptions.RemoveEmptyEntries
+                                    | StringSplitOptions.TrimEntries)[1];
+                                if (utftag.Equals("1", StringComparison.OrdinalIgnoreCase)
+                                    || utftag.Equals("true", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return Encoding.UTF8;
+                                    //break;
+                                }
+                                else if ((enc ?? Encoding.UTF8).Equals(Encoding.UTF8) && utftag.Equals("0", StringComparison.OrdinalIgnoreCase)
+                                    || utftag.Equals("false", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    return Encoding.GetEncoding(932);
+                                    //break;
+                                }
+                            }
+                        }
+                        catch (Exception tx)
+                        {
+                            Console.Error.WriteLine("UTF8 Detection Exception: {0}", tx.Message);
+                        }
+                    }
+                }
+                //return enc;
+            }
+            catch
+            {
+                //Console.Error.WriteLine("No encoding could be autodetected, using UTF8!");
+            }
+            if (!nullout)
+            {
+                enc ??= Encoding.GetEncoding(932);
+            }
+            return enc;
         }
 
         static string[] GetOptions(string arg)
