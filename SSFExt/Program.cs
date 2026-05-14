@@ -273,7 +273,14 @@ namespace SSFExt
                             bool extract_all = options.Contains('z');
                             bool always_overwrite = options.Contains('o');
                             bool dont_merge = !options.Contains('n');
-                            ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite, dont_merge);
+                            if (options.Contains('l'))
+                            {
+                                ExtractMergeVFS(args[a], binaryout.Value, args[(a + 2)..], encoding, encout, extract_all, always_overwrite, dont_merge, args[a + 1]);
+                            }
+                            else
+                            {
+                                ExtractMergeVFS(args[a], binaryout.Value, args[(a + 1)..], encoding, encout, extract_all, always_overwrite, dont_merge);
+                            }
                             return;
                         case "-c": //CREATE MINIXSF
                             if (args.Length > 4 && args[1].StartsWith("-o:", StringComparison.OrdinalIgnoreCase))
@@ -382,7 +389,7 @@ namespace SSFExt
                                         Console.WriteLine("Extract files from VFS");
                                         Console.WriteLine($"Usage: {appname} -e [-o:options] vfsfile [outfile1] [outfile2]...");
                                         Console.WriteLine("-o Options:");
-                                        Array.ForEach(GetOptions("nNoSDmxbvVZ6789^&*("), Console.WriteLine);
+                                        Array.ForEach(GetOptions("nNoSDmxbvVZl6789^&*("), Console.WriteLine);
                                         return;
                                     case "-c":
                                         Console.WriteLine("MiniXSF creator/rebaser");
@@ -1103,13 +1110,15 @@ namespace SSFExt
             return [];
         }
 
-        static int SaveMiniXsf(XsfTable xsfTable, string[]? fn = null, int xn = -1, Encoding? enc = null, bool overwrite = true, bool autoname = false)
+        static int SaveMiniXsf(XsfTable xsfTable, string[]? fn = null, int xn = -1,
+            Encoding? enc = null, bool overwrite = true, bool autoname = false, string? outdir = null)
         {
             if (xn == -1)
             {
                 xn = xsfTable.minixsfs.FindLastIndex(x => !x.is_library);
             }
             fn ??= [];
+            outdir ??= string.Empty;
             if (autoname && fn.Length > 0)
             {
                 if (fn[0].EndsWith("bin"))
@@ -1137,9 +1146,9 @@ namespace SSFExt
                     {
                         fn[0] = xsfTable.ftype switch
                         {
-                            XsfType.SSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".ssfbin",
-                            XsfType.DSF => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".dsfbin",
-                            _ => Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".bin",
+                            XsfType.SSF => Path.Combine(outdir, Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".ssfbin"),
+                            XsfType.DSF => Path.Combine(outdir, Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".dsfbin"),
+                            _ => Path.Combine(outdir, Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + ".bin"),
                         };
                     }
                     try
@@ -1160,7 +1169,8 @@ namespace SSFExt
                 case BinaryType.XSF:
                     if (string.IsNullOrEmpty(fn[0]))
                     {
-                        fn[0] = Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename) + TypeExtension(BinaryType.XSF, xsfTable.ftype);
+                        fn[0] = Path.Combine(outdir, Path.GetFileNameWithoutExtension(xsfTable.minixsfs.Last(x => !x.is_library).filename)
+                            + TypeExtension(BinaryType.XSF, xsfTable.ftype));
                     }
                     try
                     {
@@ -1205,8 +1215,8 @@ namespace SSFExt
                     int i = 0;
                     foreach (XsfFile xf in xsfTable.minixsfs.Where(x => x.modified))
                     {
-                        if ((overwrite || !File.Exists(string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i])) && 
-                            SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, string.IsNullOrEmpty(fn[i]) ? xf.filename : fn[i]))
+                        if ((overwrite || !File.Exists(string.IsNullOrEmpty(fn[i]) ? Path.Combine(outdir, xf.filename) : fn[i])) && 
+                            SaveXsfFile(xsfTable.ram, xf, xsfTable.ftype, string.IsNullOrEmpty(fn[i]) ? Path.Combine(outdir, xf.filename) : fn[i]))
                         {
                             i++;
                         }
@@ -1564,7 +1574,8 @@ namespace SSFExt
 
         static void ExtractMergeVFS(string filename, BinaryType type = BinaryType.MINIXSF, 
             string[]? outfiles = null, Encoding? enc = null, Encoding? encout = null,
-            bool extract_all = false, bool overwrite = false, bool save_seperate = true) //, bool smallest_lib = true) // string? outdir = null)
+            bool extract_all = false, bool overwrite = false, bool save_seperate = true,
+            string? outdir = null) //, bool smallest_lib = true) // string? outdir = null)
         {
             //enc ??= Encoding.ASCII;
             //encout ??= enc;
@@ -1747,14 +1758,14 @@ namespace SSFExt
                                 if (save_seperate)
                                 {
                                     Array.Copy(hsect, 0, xsf.ram, 0, hsect.Length);
-                                    SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                                    SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY, outdir: outdir);
                                 }
                             }
                             if (!save_seperate)
                             {
                                 xsf.ram ??= new byte[HeaderSize(xsf.ftype)];
                                 Array.Copy(GetHeaderSect(lowest, xsf.ftype, true), 0, xsf.ram, 0, HeaderSize(xsf.ftype));
-                                SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY);
+                                SaveMiniXsf(xsf, overwrite: overwrite, autoname: type == BinaryType.ANY, outdir: outdir);
                             }
                             //done_out_files += (type == BinaryType.MINIXSF) ? xsf.minixsfs.Count : 1;
                         }
@@ -2065,6 +2076,7 @@ namespace SSFExt
                     'o' => "o - Always overwrite files when extracting from VFS",
                     'O' => "O - Align MiniXSF size",
                     'L' => "L - Zero out all areas of XSFLIB not covered by all MINIXSFS",
+                    'l' => "l - Output extracted files to directory specified in argument",
                     _ => null
                 };
                 if (desc != null)
