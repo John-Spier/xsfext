@@ -821,7 +821,7 @@ namespace SSFExt
                                     source = Path.GetFullPath(f)
                                 });
                                 break;
-                            case ".drv":
+                            case ".v68":
                                 listfiles.Add(new VFSFile2
                                 {
                                     load_direct = true,
