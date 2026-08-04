@@ -761,45 +761,148 @@ namespace SSFExt
             {
                 if (xpattern.Value == XsfType.SSF || xpattern.Value == XsfType.ANY)
                 {
-                    foreach (string f in Directory.GetFiles(dir, "vgm68.bin", SearchOption.AllDirectories))
+                    foreach (string f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
                     {
-                        xsffiles.Add(new VFSFile2
+                        if (Path.GetFileName(f).Equals("vgm68.bin", StringComparison.OrdinalIgnoreCase))
                         {
-                            load_direct = true,
-                            name = "VGM/MOD/MDX 68K Driver",
-                            filetype = 0xFFFFFF1A,
-                            source = Path.GetFullPath(f)
-                        });
-                    }
-                    foreach (string f in Directory.GetFiles(dir, "*.mod", SearchOption.AllDirectories))
-                    {
-                        listfiles.Add(new VFSFile2
+                            xsffiles.Add(new VFSFile2
+                            {
+                                load_direct = true,
+                                name = "VGM/MOD/MDX 68K Driver",
+                                filetype = 0xFFFFFF1A,
+                                source = Path.GetFullPath(f)
+                            });
+                        }
+                        else switch (Path.GetExtension(f).ToLowerInvariant())
                         {
-                            load_direct = true,
-                            name = Path.GetFileNameWithoutExtension(f),
-                            filetype = 0xFFFFFF1B,
-                            source = Path.GetFullPath(f)
-                        });
-                    }
-                    foreach (string f in Directory.GetFiles(dir, "*.vgm", SearchOption.AllDirectories))
-                    {
-                        listfiles.Add(new VFSFile2
-                        {
-                            load_direct = true,
-                            name = Path.GetFileNameWithoutExtension(f),
-                            filetype = 0xFFFFFF1C,
-                            source = Path.GetFullPath(f)
-                        });
-                    }
-                    foreach (string f in Directory.GetFiles(dir, "*.mdx", SearchOption.AllDirectories))
-                    {
-                        listfiles.Add(new VFSFile2
-                        {
-                            load_direct = true,
-                            name = Path.GetFileNameWithoutExtension(f),
-                            filetype = 0xFFFFFF1D,
-                            source = Path.GetFullPath(f)
-                        });
+                            case ".mod":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF1B,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".vgm":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF1C,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".mdx":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF1D,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".aif":
+                            case ".aiff":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF1E,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".adp":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF1F,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".drv":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF20,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".seq":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF21,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".ton":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF22,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".exb":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF24,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".dsp":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF25,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".cpk":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF26,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".map":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF29,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".tsk":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFF2A,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                            case ".vfs":
+                                listfiles.Add(new VFSFile2
+                                {
+                                    load_direct = true,
+                                    name = Path.GetFileNameWithoutExtension(f),
+                                    filetype = 0xFFFFFFFE,
+                                    source = Path.GetFullPath(f)
+                                });
+                                break;
+                        }
                     }
                 }
             }
