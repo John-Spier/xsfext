@@ -831,6 +831,7 @@ namespace SSFExt
                                 });
                                 break;
                             case ".seq":
+                            case ".qes":
                                 listfiles.Add(new VFSFile2
                                 {
                                     load_direct = true,
